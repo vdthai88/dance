@@ -1,0 +1,379 @@
+import { NextResponse } from "next/server";
+import {
+  DANCE_CRITIQUE_PROMPT,
+  DANCE_COMPARISON_PROMPT,
+  danceCritiqueSchema,
+  danceComparisonSchema,
+  isDanceCritique,
+} from "../../lib/gemini-critique";
+import { findCritique, findCritiqueForVideo, fingerprintVideo, makeCritiqueKey, saveCritique } from "../../lib/critique-store";
+import { attachSessionCritique, attachSessionVideo } from "../../lib/session-store";
+
+export const runtime = "nodejs";
+export const maxDuration = 600;
+
+const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
+const MIME_TYPES = new Set(["video/mp4", "video/quicktime", "video/webm", "video/mpeg", "video/x-msvideo"]);
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
+const UPLOAD_BASE = "https://generativelanguage.googleapis.com/upload/v1beta";
+
+type GeminiFile = { name?: string; uri?: string; mimeType?: string; state?: string };
+
+class GeminiRequestError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
+async function uploadAndPrepare(video: File, index: number, apiKey: string, trackUpload: (file: GeminiFile) => void): Promise<GeminiFile> {
+  const startUpload = await fetch(`${UPLOAD_BASE}/files`, {
+    method: "POST",
+    headers: {
+      "x-goog-api-key": apiKey,
+      "X-Goog-Upload-Protocol": "resumable",
+      "X-Goog-Upload-Command": "start",
+      "X-Goog-Upload-Header-Content-Length": String(video.size),
+      "X-Goog-Upload-Header-Content-Type": video.type,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ file: { display_name: `dance-${index === 0 ? "earlier" : "newer"}-${Date.now()}` } }),
+  });
+  if (!startUpload.ok) {
+    const failure = await responseError(startUpload);
+    throw new GeminiRequestError(failure.message, failure.status);
+  }
+
+  const uploadUrl = startUpload.headers.get("x-goog-upload-url");
+  if (!uploadUrl) throw new GeminiRequestError("Gemini did not provide an upload location. Please try again.", 502);
+
+  const uploadResponse = await fetch(uploadUrl, {
+    method: "POST",
+    headers: { "X-Goog-Upload-Offset": "0", "X-Goog-Upload-Command": "upload, finalize", "Content-Type": video.type },
+    body: await video.arrayBuffer(),
+  });
+  if (!uploadResponse.ok) {
+    const failure = await responseError(uploadResponse);
+    throw new GeminiRequestError(failure.message, failure.status);
+  }
+
+  const uploadResult = await uploadResponse.json() as { file?: GeminiFile };
+  const uploadedFile = uploadResult.file;
+  if (!uploadedFile?.uri || !uploadedFile.mimeType || !uploadedFile.name) {
+    throw new GeminiRequestError("Gemini did not return a usable video upload. Please try again.", 502);
+  }
+  trackUpload(uploadedFile);
+
+  let state = uploadedFile.state;
+  for (let attempt = 0; state === "PROCESSING" && attempt < 30; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const statusResponse = await fetch(`${GEMINI_BASE}/${uploadedFile.name}`, { headers: { "x-goog-api-key": apiKey } });
+    if (!statusResponse.ok) {
+      const failure = await responseError(statusResponse);
+      throw new GeminiRequestError(failure.message, failure.status);
+    }
+    const statusResult = await statusResponse.json() as GeminiFile;
+    state = statusResult.state;
+  }
+  if (state === "PROCESSING") throw new GeminiRequestError("Gemini is still preparing a video. Please try shorter clips.", 504);
+  if (state === "FAILED") {
+    const take = index === 0 ? "earlier" : "newer";
+    throw new GeminiRequestError(`Gemini could not process the ${take} take. Re-export it as a standard MP4 with H.264 video and AAC audio, then retry.`, 422);
+  }
+  return uploadedFile;
+}
+
+function jsonError(message: string, status: number) {
+  return NextResponse.json({ error: message }, { status });
+}
+
+async function readInteractionStream(response: Response) {
+  if (!response.body) throw new Error("Gemini returned an empty response stream.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const contentType = response.headers.get("content-type") ?? "unknown";
+  let buffer = "";
+  let rawBody = "";
+  let text = "";
+  let status = "";
+  let id = "";
+  let parsedEvents = 0;
+  let dataLines = 0;
+  const eventTypes: string[] = [];
+  let failure: { code?: string | number; message?: string } | undefined;
+
+  const handleEvent = (event: {
+    event_type?: string;
+    delta?: { type?: string; text?: string };
+    interaction?: { id?: string; status?: string };
+    error?: { code?: string | number; message?: string };
+  }, sseEventType?: string) => {
+    parsedEvents += 1;
+    const eventType = event.event_type ?? sseEventType;
+    if (eventType) eventTypes.push(eventType);
+    if (eventType === "step.delta" && event.delta?.type === "text") text += event.delta.text ?? "";
+    if (eventType === "interaction.created") id = event.interaction?.id ?? id;
+    if (eventType === "interaction.completed") {
+      id = event.interaction?.id ?? id;
+      status = event.interaction?.status ?? "";
+    }
+    if (eventType === "error") failure = event.error;
+  };
+
+  const dispatch = (block: string) => {
+    const lines = block.split(/\r\n|\r|\n/);
+    const sseEventType = lines.find((line) => line.startsWith("event:"))?.slice(6).trim();
+    const dataFields = lines.filter((line) => line.startsWith("data:"));
+    dataLines += dataFields.length;
+    const data = lines
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n");
+    if (!data || data === "[DONE]") return;
+
+    const parseRecord = (record: string) => {
+      const normalized = record.replace(/^\uFEFF/, "").replace(/^\)\]\}',?\s*/, "").trim();
+      if (!normalized || normalized === "[DONE]") return false;
+      try {
+        handleEvent(JSON.parse(normalized), sseEventType);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    if (!parseRecord(data)) {
+      // Some SSE producers separate data records with a single line ending.
+      for (const record of data.split(/\r\n|\r|\n/)) parseRecord(record);
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    const chunk = decoder.decode(value, { stream: !done });
+    buffer += chunk;
+    rawBody += chunk;
+    const blocks = buffer.split(/\r\n\r\n|\r\r|\n\n/);
+    buffer = blocks.pop() ?? "";
+    for (const block of blocks) dispatch(block);
+    if (done) break;
+  }
+  if (buffer.trim()) dispatch(buffer);
+
+  if (parsedEvents === 0) {
+    try {
+      const payload = JSON.parse(rawBody) as {
+        id?: string;
+        status?: string;
+        error?: { code?: string | number; message?: string };
+        steps?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>;
+      };
+      id = payload.id ?? id;
+      status = payload.status ?? status;
+      failure = payload.error ?? failure;
+      text = payload.steps
+        ?.filter((step) => step.type === "model_output")
+        .flatMap((step) => step.content ?? [])
+        .filter((part) => part.type === "text")
+        .map((part) => part.text ?? "")
+        .join("") ?? text;
+    } catch { /* The diagnostics below will describe an unrecognized stream format. */ }
+  }
+
+  return { id, status, text: text.trim(), failure, contentType, parsedEvents, dataLines, eventTypes, responseChars: rawBody.length };
+}
+
+async function fetchModelWithRetry(url: string, init: RequestInit) {
+  let response = await fetch(url, init);
+  if (response.status !== 503) return response;
+
+  console.warn("Gemini is temporarily overloaded; retrying the model request once.");
+  await response.body?.cancel().catch(() => undefined);
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  response = await fetch(url, init);
+  return response;
+}
+
+async function responseError(response: Response) {
+  const payload = await response.json().catch(() => null) as { error?: { message?: string } } | null;
+  const message = payload?.error?.message ?? "Gemini could not process the video.";
+  if (response.status === 401 || response.status === 403) {
+    return { message: "Gemini rejected the API key or this project does not have access. Check GEMINI_API_KEY in dance/.env.local.", status: 502 };
+  }
+  if (response.status === 429) {
+    return { message: "Gemini reached a usage or rate limit. Check the project's AI Studio quota and try again later.", status: 429 };
+  }
+  if (response.status === 503) {
+    console.warn("Gemini is still overloaded after a retry:", message);
+    return { message: "Gemini is temporarily busy and could not start the critique. Wait a minute, then try again.", status: 503 };
+  }
+  console.error("Gemini dance critique request failed:", response.status, message);
+  return { message: "Gemini could not complete the critique. Check the VS Code terminal for details, then try again.", status: 502 };
+}
+
+export async function POST(request: Request) {
+  let form: FormData;
+  try {
+    form = await request.formData();
+  } catch {
+    return jsonError("The request must contain a video upload.", 400);
+  }
+
+  const earlier = form.get("video");
+  const newer = form.get("comparisonVideo");
+  if (!(earlier instanceof File)) return jsonError("Choose the earlier take before requesting a critique.", 400);
+  if (newer !== null && !(newer instanceof File)) return jsonError("Choose a valid video for the newer take.", 400);
+  const videos = newer instanceof File ? [earlier, newer] : [earlier];
+  if (videos.some((video) => !MIME_TYPES.has(video.type))) return jsonError("Use MP4, MOV, WebM, MPEG, or AVI videos.", 415);
+  if (videos.some((video) => video.size === 0)) return jsonError("A selected video is empty.", 400);
+  if (videos.some((video) => video.size > MAX_VIDEO_BYTES) || videos.reduce((sum, video) => sum + video.size, 0) > MAX_VIDEO_BYTES) {
+    return jsonError("Gemini critique supports up to 250 MB total across both videos.", 413);
+  }
+
+  const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+  const sessionIdValue = form.get("sessionId");
+  const sessionId = typeof sessionIdValue === "string" && sessionIdValue ? sessionIdValue : null;
+  let earlierHash: string;
+  let newerHash: string | null = null;
+  let cacheKey: string;
+  let savedBaseline: ReturnType<typeof findCritiqueForVideo> = null;
+  const earlierSongStartValue = Number(form.get("earlierSongStart"));
+  const newerSongStartValue = Number(form.get("newerSongStart"));
+  const earlierSongStart = Number.isFinite(earlierSongStartValue) && earlierSongStartValue >= 0 ? earlierSongStartValue : 0;
+  const newerSongStart = Number.isFinite(newerSongStartValue) && newerSongStartValue >= 0 ? newerSongStartValue : 0;
+  try {
+    earlierHash = await fingerprintVideo(earlier);
+    if (newer instanceof File) newerHash = await fingerprintVideo(newer);
+    cacheKey = makeCritiqueKey(earlierHash, newerHash);
+    if (sessionId) {
+      if (!attachSessionVideo(sessionId, earlierHash, earlier.name)) return jsonError("Practice session not found. Select the session again.", 404);
+      if (newer instanceof File && newerHash && !attachSessionVideo(sessionId, newerHash, newer.name)) return jsonError("Practice session not found. Select the session again.", 404);
+    }
+    const cached = findCritique(cacheKey);
+    if (cached) {
+      if (sessionId) attachSessionCritique(sessionId, cached.key);
+      return NextResponse.json(cached.critique, { headers: { "X-Critique-Cache": "hit" } });
+    }
+    if (newer instanceof File) savedBaseline = findCritiqueForVideo(earlierHash);
+  } catch (error) {
+    console.error("Could not read the local critique database:", error);
+    return jsonError("The local critique database could not be read. Check the server terminal and try again.", 500);
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return jsonError("Add GEMINI_API_KEY to dance/.env.local, then restart the development server.", 503);
+  }
+
+  const uploadedFiles: GeminiFile[] = [];
+  let requestStage = "starting the Gemini file upload";
+
+  try {
+    requestStage = "uploading and preparing both takes with Gemini";
+    const preparationResults = await Promise.allSettled(videos.map((video, index) => uploadAndPrepare(video, index, apiKey, (file) => uploadedFiles.push(file))));
+    const preparationFailure = preparationResults.find((result) => result.status === "rejected");
+    if (preparationFailure?.status === "rejected") throw preparationFailure.reason;
+
+    requestStage = "starting the streamed critique";
+    const input: Array<{ type: "text"; text: string } | { type: "video"; uri: string; mime_type: string }> = videos.flatMap((video, index) => [
+      { type: "text", text: index === 0 ? "Earlier take:" : "Newer take:" },
+      {
+        type: "video",
+        uri: uploadedFiles[index].uri!,
+        mime_type: uploadedFiles[index].mimeType === "video/quicktime" ? "video/mov" : uploadedFiles[index].mimeType === "video/x-msvideo" ? "video/avi" : uploadedFiles[index].mimeType!,
+      },
+    ]);
+    if (savedBaseline && videos.length === 2) {
+      const mappedObservations = savedBaseline.critique.observations.map((observation) => ({
+        ...observation,
+        earlierTimestampSeconds: observation.timestampSeconds,
+        newerTimestampSeconds: observation.timestampSeconds === null
+          ? null
+          : Math.max(0, observation.timestampSeconds - earlierSongStart + newerSongStart),
+      }));
+      input.push({ type: "text", text: `A saved original critique exists for the earlier video. Use it as the baseline and compare these same moments in both videos. For each baseline timestamp, inspect the mapped newer timestamp after aligning song starts. Determine whether the note appears resolved, still present, changed, or cannot be assessed from the footage. Ground every judgment in visible evidence, and preserve uncertainty.\nSong-start markers: earlier=${earlierSongStart.toFixed(2)}s, newer=${newerSongStart.toFixed(2)}s.\nMapped baseline observations and original feedback:\n${JSON.stringify(mappedObservations)}\nOriginal critique summary and limitations:\n${JSON.stringify({ summary: savedBaseline.critique.summary, limitations: savedBaseline.critique.limitations })}` });
+    }
+    input.push({ type: "text", text: videos.length === 2 ? "Compare the two takes using the instructor instructions." : "Review the dance practice video using the instructor instructions." });
+    const interactionResponse = await fetchModelWithRetry(`${GEMINI_BASE}/interactions`, {
+      method: "POST",
+      headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        input,
+        system_instruction: videos.length === 2 ? DANCE_COMPARISON_PROMPT : DANCE_CRITIQUE_PROMPT,
+        response_format: {
+          type: "text",
+          mime_type: "application/json",
+          schema: videos.length === 2 ? danceComparisonSchema : danceCritiqueSchema,
+        },
+        stream: true,
+      }),
+    });
+    if (!interactionResponse.ok) {
+      const failure = await responseError(interactionResponse);
+      return jsonError(failure.message, failure.status);
+    }
+
+    requestStage = "waiting for Gemini to analyze the video";
+    const interaction = await readInteractionStream(interactionResponse);
+    if (interaction.failure || interaction.status !== "completed") {
+      console.error("Gemini critique stream ended without a complete response:", JSON.stringify({
+        id: interaction.id,
+        status: interaction.status,
+        error: interaction.failure,
+        contentType: interaction.contentType,
+        parsedEvents: interaction.parsedEvents,
+        dataLines: interaction.dataLines,
+        eventTypes: interaction.eventTypes,
+        responseChars: interaction.responseChars,
+      }));
+      return jsonError("Gemini could not complete this critique. Check the terminal for the interaction status and try again.", 502);
+    }
+    const text = interaction.text;
+    if (!text) return jsonError("Gemini returned an empty critique. Please try again.", 502);
+
+    let critique: unknown;
+    try {
+      critique = JSON.parse(text);
+    } catch {
+      return jsonError("Gemini returned a critique in an unexpected format. Please try again.", 502);
+    }
+    if (!isDanceCritique(critique)) return jsonError("Gemini's critique did not match the expected format. Please try again.", 502);
+
+    try {
+      saveCritique({
+        key: cacheKey,
+        earlierHash,
+        newerHash,
+        earlierFilename: earlier.name,
+        newerFilename: newer instanceof File ? newer.name : null,
+        model,
+        critique,
+      });
+      if (sessionId) attachSessionCritique(sessionId, cacheKey);
+    } catch (error) {
+      console.error("Could not save the critique to the local database:", error);
+      return jsonError("Gemini returned a critique, but the local database could not save it. Check the server terminal.", 500);
+    }
+    return NextResponse.json(critique, { headers: { "X-Critique-Cache": "miss" } });
+  } catch (error) {
+    if (error instanceof GeminiRequestError) return jsonError(error.message, error.status);
+    const cause = error instanceof Error ? (error as Error & { cause?: { code?: string } }).cause : undefined;
+    const headersTimedOut = cause?.code === "UND_ERR_HEADERS_TIMEOUT";
+    console.error(`Dance critique failed while ${requestStage}:`, error);
+    return jsonError(
+      headersTimedOut
+        ? `Gemini timed out while ${requestStage}. Check the connection and retry with a shorter clip.`
+        : "The critique request failed. Check the server terminal and try again.",
+      headersTimedOut ? 504 : 502,
+    );
+  } finally {
+    for (const uploadedFile of uploadedFiles) {
+      if (uploadedFile.name) try {
+        await fetch(`${GEMINI_BASE}/${uploadedFile.name}`, {
+          method: "DELETE",
+          headers: { "x-goog-api-key": apiKey },
+        });
+      } catch (error) {
+        console.error("Could not delete temporary Gemini video:", error);
+      }
+    }
+  }
+}
