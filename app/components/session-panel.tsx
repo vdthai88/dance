@@ -30,8 +30,9 @@ function today() {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-export function SessionPanel({ role, videoFile, onSessionChange }: {
+export function SessionPanel({ role, onRoleChange, videoFile, onSessionChange }: {
   role: Role;
+  onRoleChange: (role: Role) => void;
   videoFile: File | null;
   onSessionChange: (session: PracticeSession | null) => void;
 }) {
@@ -44,6 +45,7 @@ export function SessionPanel({ role, videoFile, onSessionChange }: {
   const [newStudentOrganizationId, setNewStudentOrganizationId] = useState("");
   const [teacherOrganization, setTeacherOrganization] = useState<TeacherOrganization | null>(null);
   const [isCompanyOwner, setIsCompanyOwner] = useState(false);
+  const [canUseTeacherMode, setCanUseTeacherMode] = useState(false);
   const [companyMembers, setCompanyMembers] = useState<CompanyMember[]>([]);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"teacher" | "student">("teacher");
@@ -63,20 +65,31 @@ export function SessionPanel({ role, videoFile, onSessionChange }: {
 
   useEffect(() => {
     let active = true;
+    void fetch("/api/account/roles")
+      .then(async (response) => {
+        const result = await response.json() as { roles?: string[]; error?: string };
+        if (!response.ok) throw new Error(result.error || "Could not load account roles.");
+        if (active) setCanUseTeacherMode(result.roles?.includes("teacher") || result.roles?.includes("admin") || false);
+      })
+      .catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : "Could not load account roles."); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (role !== "teacher") return;
+    let active = true;
     void fetch("/api/teacher-organization")
       .then(async (response) => {
         const result = await response.json() as { organization?: TeacherOrganization | null; error?: string };
         if (!response.ok) throw new Error(result.error || "Could not load the teacher company.");
         if (active && result.organization) {
           setTeacherOrganization(result.organization);
-          setCompanyName(result.organization.name);
-          setCompanyType(result.organization.type);
           setNewStudentOrganizationId(result.organization.id);
         }
       })
       .catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : "Could not load the teacher company."); });
     return () => { active = false; };
-  }, []);
+  }, [role]);
 
   useEffect(() => {
     if (!teacherOrganization || !isCompanyOwner) {
@@ -94,6 +107,7 @@ export function SessionPanel({ role, videoFile, onSessionChange }: {
   }, [teacherOrganization, isCompanyOwner]);
 
   useEffect(() => {
+    if (role !== "teacher") return;
     let active = true;
     void fetch("/api/teacher-profile")
       .then(async (response) => {
@@ -103,7 +117,7 @@ export function SessionPanel({ role, videoFile, onSessionChange }: {
       })
       .catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : "Could not load the teacher profile."); });
     return () => { active = false; };
-  }, []);
+  }, [role]);
 
   useEffect(() => {
     let active = true;
@@ -114,7 +128,15 @@ export function SessionPanel({ role, videoFile, onSessionChange }: {
         const studentList = result as Student[];
         if (active) {
           setStudents(studentList);
-          if (studentList.length) setSelectedStudentId((current) => current || studentList[0].id);
+          if (role === "student") {
+            setSelectedStudentId(studentList[0]?.id ?? "");
+            setSessions([]);
+            setSelectedSessionId("");
+            setSnapshot(null);
+          } else if (studentList.length) {
+            setSelectedStudentId((current) => current || studentList[0].id);
+          }
+          setError("");
         }
       })
       .catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : "Could not load students."); });
@@ -178,17 +200,11 @@ export function SessionPanel({ role, videoFile, onSessionChange }: {
     event.preventDefault();
     if (!companyName.trim()) return;
     setIsSavingCompany(true);
-    setError("");
     try {
-      const response = await fetch("/api/teacher-organization", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: companyName.trim(), type: companyType }),
-      });
+      const response = await fetch("/api/teacher-organization", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: companyName.trim(), type: companyType }) });
       const result = await response.json() as { organization?: TeacherOrganization; error?: string };
       if (!response.ok || !result.organization) throw new Error(result.error || "Could not save the teacher company.");
       setTeacherOrganization(result.organization);
-      setCompanyName(result.organization.name);
       setNewStudentOrganizationId(result.organization.id);
       await refreshStudents();
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not save the teacher company."); }
@@ -279,13 +295,13 @@ export function SessionPanel({ role, videoFile, onSessionChange }: {
   }
 
   return <section className="session-panel">
-    <div className="session-panel-header"><div><div className="eyebrow muted">PRACTICE RECORD</div><h3>{role === "teacher" ? "Students & sessions" : "Your sessions"}</h3></div><span className="sample-tag">LOCAL PROFILE</span></div>
+    <div className="session-panel-header"><div><div className="eyebrow muted personal-space-label"><span className="eyebrow-dot" /> YOUR PERSONAL PRACTICE SPACE</div>{role === "teacher" && <h3>Students & sessions</h3>}</div><div className="profile-switch session-profile-switch" role="group" aria-label="Choose coaching profile"><button type="button" className={role === "student" ? "selected" : ""} onClick={() => onRoleChange("student")}>Student</button><button type="button" className={role === "teacher" ? "selected" : ""} onClick={() => onRoleChange("teacher")} disabled={!canUseTeacherMode} title={!canUseTeacherMode ? "This account does not have the Teacher role." : undefined}>Teacher</button></div></div>
     <div className="session-selectors">
-      {role === "teacher" ? <label>Student profile<select value={selectedStudentId} onChange={(event) => selectStudent(event.target.value)}><option value="">Choose student</option>{students.map((student) => <option key={student.id} value={student.id}>{student.name}{student.organizationName ? ` · ${student.organizationName}` : " · AI only"}</option>)}</select></label> : <div className="session-profile-display"><span>Student profile</span><strong>{selectedStudent?.name ?? "No student profile"}</strong></div>}
-      <label>Session<select value={selectedSessionId} onChange={(event) => selectSession(event.target.value)} disabled={!selectedStudentId}><option value="">Choose session</option>{sessions.map((session) => <option key={session.id} value={session.id}>{session.sessionDate} · {session.location}</option>)}</select></label>
+      {role === "teacher" ? <label>Student profile<select value={selectedStudentId} onChange={(event) => selectStudent(event.target.value)}><option value="">Choose student</option>{students.map((student) => <option key={student.id} value={student.id}>{student.name}</option>)}</select></label> : <div className="session-profile-display"><strong>{selectedStudent?.name ?? "No student profile"}</strong></div>}
+      <label><span className="visually-hidden">Session</span><select aria-label="Session" value={selectedSessionId} onChange={(event) => selectSession(event.target.value)} disabled={!selectedStudentId}><option value="">Choose session</option>{sessions.map((session) => <option key={session.id} value={session.id}>{session.sessionDate} · {session.location}</option>)}</select></label>
     </div>
     {role === "teacher" && <div className="session-create-forms">
-      <form className="company-form" onSubmit={saveCompany}>
+      <form className="company-form" onSubmit={saveCompany} hidden>
         <label>Company name<input value={companyName} onChange={(event) => setCompanyName(event.target.value)} placeholder="Studio or private company" maxLength={160} required/></label>
         <label>Company type<select value={companyType} onChange={(event) => setCompanyType(event.target.value as CompanyType)}><option value="studio">Dance studio</option><option value="private_company">Private company</option><option value="other">Other</option></select></label>
         <button className="button button-dark" disabled={isSavingCompany || !companyName.trim()}>{isSavingCompany ? "Saving…" : teacherOrganization ? "Update company" : "Associate company"}</button>
@@ -304,7 +320,6 @@ export function SessionPanel({ role, videoFile, onSessionChange }: {
       </form>
       <form className="inline-form session-form" onSubmit={createSession}><label>Session date<input type="date" value={sessionDate} onChange={(event) => setSessionDate(event.target.value)} required/></label><label>Location<input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Studio, school, or online" maxLength={160} required/></label><button className="button button-dark" disabled={isCreatingSession || !selectedStudentId || !location.trim()}>{isCreatingSession ? "Creating…" : "New session"}</button></form>
     </div>}
-    {role === "student" && selectedStudentId && <form className="inline-form session-form" onSubmit={createSession}><label>Session date<input type="date" value={sessionDate} onChange={(event) => setSessionDate(event.target.value)} required/></label><label>Location<input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Studio, school, or online" maxLength={160} required/></label><button className="button button-dark" disabled={isCreatingSession || !location.trim()}>{isCreatingSession ? "Creating…" : "New session"}</button></form>}
     {role === "student" && !students.length && <p className="session-empty">No student profile is linked to this account yet. Ask your teacher to send a student invitation.</p>}
     {selectedSessionId && <div className="session-details">
       {snapshot ? <><div className="session-detail-heading"><strong>{snapshot.session.studentName} · {snapshot.session.sessionDate}</strong><span>{snapshot.session.location}</span></div>
@@ -315,6 +330,6 @@ export function SessionPanel({ role, videoFile, onSessionChange }: {
     </div>}
     {!selectedSessionId && role === "teacher" && <p className="session-empty">Create a student profile, then create a dated session with its location. A video is optional.</p>}
     {error && <p className="error-message" role="alert">{error}</p>}
-    <ConnectionPanel role={role} onAccepted={() => { void refreshStudents(); }} />
+    {role === "teacher" && <ConnectionPanel role="teacher" onAccepted={() => { void refreshStudents(); }} />}
   </section>;
 }

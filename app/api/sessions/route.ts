@@ -30,9 +30,7 @@ export async function POST(request: Request) {
   try {
     const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Sign in to create a session." }, { status: 401 });
-    const canManageAsTeacher = canAccessStudent(user.id, studentId, true);
-    const canCreateForSelf = canAccessStudent(user.id, studentId, false);
-    if (!canManageAsTeacher && !canCreateForSelf) return NextResponse.json({ error: "You do not have permission to create a session for this student." }, { status: 403 });
+    if (!canAccessStudent(user.id, studentId, true)) return NextResponse.json({ error: "Only an assigned teacher or company teacher can create a session for this student." }, { status: 403 });
     const session = createPracticeSession({ studentId, sessionDate, location });
     if (!session) return NextResponse.json({ error: "That student profile could not be found." }, { status: 404 });
     return NextResponse.json(session, { status: 201 });

@@ -4,9 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEvent, DragEvent } from "react";
 import { alignClipsByAudio } from "./lib/clip-alignment";
 import type { DanceCritique } from "./lib/gemini-critique";
+import { AccountMenu } from "./components/account-menu";
 import { TeacherFeedbackPanel } from "./components/teacher-feedback-panel";
 import { SessionPanel } from "./components/session-panel";
-import { AccountMenu } from "./components/account-menu";
+import { ProfilePage } from "./components/profile-page";
 
 function formatTime(seconds: number) {
   const safe = Math.max(0, Math.floor(seconds));
@@ -46,6 +47,9 @@ export default function Home() {
   const [danceCritique, setDanceCritique] = useState<DanceCritique | null>(null);
   const [savedBaseline, setSavedBaseline] = useState<SavedBaseline | null>(null);
   const [profile, setProfile] = useState<"student" | "teacher">("student");
+  const [profileRequired, setProfileRequired] = useState(false);
+  const [activePage, setActivePage] = useState<"replai" | "coaching" | "profile">("replai");
+  const [routeReady, setRouteReady] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isLookingUpBaseline, setIsLookingUpBaseline] = useState(false);
   const [baselineLookupError, setBaselineLookupError] = useState("");
@@ -60,7 +64,45 @@ export default function Home() {
   const comparisonInput = useRef<HTMLInputElement>(null);
   const baselineLookupId = useRef(0);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams(window.location.search);
+      const requestedPage = params.get("page");
+      const profileIsRequired = params.get("required") === "1";
+
+      if (profileIsRequired) {
+        setProfileRequired(true);
+        setActivePage("profile");
+      } else if (requestedPage === "replai" || requestedPage === "coaching" || requestedPage === "profile") {
+        setActivePage(requestedPage);
+      }
+      setRouteReady(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!routeReady) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("page", activePage);
+    if (profileRequired) url.searchParams.set("required", "1");
+    else url.searchParams.delete("required");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+  }, [activePage, profileRequired, routeReady]);
+
   useEffect(() => () => { if (videoUrl) URL.revokeObjectURL(videoUrl); }, [videoUrl]);
+
+  async function openCoaching() {
+    try {
+      const response = await fetch("/api/account/roles");
+      const result = await response.json() as { roles?: string[] };
+      setProfile(result.roles?.includes("teacher") || result.roles?.includes("admin") ? "teacher" : "student");
+    } catch {
+      setProfile("student");
+    }
+    setActivePage("coaching");
+    document.getElementById("studio")?.scrollIntoView({ behavior: "smooth" });
+  }
 
   async function loadSavedBaseline(file: File) {
     const lookupId = ++baselineLookupId.current;
@@ -267,15 +309,27 @@ export default function Home() {
   }, [videoFile, comparisonFile, autoAlignMusic]);
 
   return (
-    <main className="shell">
+    <main className="shell app-shell">
+      <aside className="sidebar" aria-label="Main navigation">
+        <a className="sidebar-logo" href="#top" aria-label="One home">O</a>
+        <nav className="sidebar-nav">
+          <button className="sidebar-item active" type="button" title="ReplAI" onClick={() => { setProfile("student"); document.getElementById("studio")?.scrollIntoView({ behavior: "smooth" }); }}><span>▶</span><b>ReplAI</b></button>
+          <button className="sidebar-item" type="button" title="Coaching" onClick={() => { setProfile("teacher"); document.getElementById("coaching")?.scrollIntoView({ behavior: "smooth" }); }}><span>✦</span><b>Coaching</b></button>
+          <button className="sidebar-item" type="button" title="Profile"><span>◉</span><b>Profile</b></button>
+          <button className="sidebar-item" type="button" title="Team"><span>♧</span><b>Team</b></button>
+          <button className={`sidebar-item ${activePage === "replai" ? "active" : ""}`} type="button" title="ReplAI" onClick={() => { if (profileRequired) { setActivePage("profile"); return; } setActivePage("replai"); setProfile("student"); document.getElementById("studio")?.scrollIntoView({ behavior: "smooth" }); }}><span>R</span><b>ReplAI</b></button>
+          <button className={`sidebar-item ${activePage === "coaching" ? "active" : ""}`} type="button" title="Coaching" onClick={() => { if (profileRequired) { setActivePage("profile"); return; } void openCoaching(); }}><span>C</span><b>Coaching</b></button>
+          <button className={`sidebar-item ${activePage === "profile" ? "active" : ""}`} type="button" title="Profile" onClick={() => { setActivePage("profile"); document.getElementById("profile")?.scrollIntoView({ behavior: "smooth" }); }}><span>P</span><b>Profile</b></button>
+        </nav>
+        <button className="sidebar-item sidebar-settings" type="button" title="Settings"><span>⚙</span><b>Settings</b></button>
+      </aside>
       <header className="topbar">
         <a className="brand brand-logo" href="#top" aria-label="One Dance home"><img src="/one_dance_logo.png?v=20261111" alt="One Dance" width={76} height={62} /></a>
-        <nav aria-label="Main navigation"><a className="active" href="#studio">Studio</a><a href="#how-it-works">How it works</a></nav>
-        <div className="profile-switch" role="group" aria-label="Choose profile"><button type="button" className={profile === "student" ? "selected" : ""} onClick={() => setProfile("student")}>Student</button><button type="button" className={profile === "teacher" ? "selected" : ""} onClick={() => setProfile("teacher")}>Teacher</button></div>
+        <p className="header-slogan">Every move has a <em>next step.</em></p>
         <AccountMenu />
       </header>
 
-      <section className="hero" id="top">
+      {false && <section className="hero" id="top">
         <div className="hero-copy">
           <div className="eyebrow"><span className="eyebrow-dot" /> YOUR PERSONAL PRACTICE SPACE</div>
           <h1>Every move<br />has a <em>next step.</em></h1>
@@ -283,13 +337,12 @@ export default function Home() {
           <div className="hero-note"><span>âœ³</span><span>Made for the work between classes.</span></div>
         </div>
         <div className="hero-art" aria-hidden="true"><div className="art-sun"/><div className="art-orbit orbit-one"/><div className="art-orbit orbit-two"/><div className="art-ribbon ribbon-one"/><div className="art-ribbon ribbon-two"/><div className="art-caption">find your<br/>own rhythm <span>â†—</span></div><div className="art-number">01 / 04</div></div>
-      </section>
+      </section>}
 
-      <section className="workspace" id="studio">
+      {activePage === "replai" && <section className="workspace" id="studio">
         <div className="section-heading"><div><div className="eyebrow muted">THE STUDIO <span className="step-line"/> STEP 01</div><h2>Practice sessions</h2><p>Choose a student and session, then add coaching or videos.</p></div><div className="privacy"><span>â™§</span> Videos stay local unless you request Gemini feedback</div></div>
 
-        <SessionPanel role={profile} videoFile={videoFile} onSessionChange={(session) => setActiveSessionId(session?.id ?? null)} />
-        <TeacherFeedbackPanel sessionId={activeSessionId} role={profile} />
+        <section className="replai-intro"><div className="eyebrow muted">A PRACTICE, NOT A PERFORMANCE</div><h1>Small steps add up.</h1><div className="replai-steps"><article><span>01</span><h2>Choose your take</h2><p>Upload a solo practice video from your device.</p></article><article><span>02</span><h2>Notice the details</h2><p>Explore a sample report with moments and movement cues.</p></article><article><span>03</span><h2>Try it your way</h2><p>Keep what resonates. Your practice belongs to you.</p></article></div></section>
 
         {!videoUrl ? (
           <div className={`upload-card ${dragging ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={onDrop}>
@@ -324,9 +377,11 @@ export default function Home() {
           </div>
         )}
         {error && <p className="error-message" role="alert">{error}</p>}
-      </section>
+      </section>}
 
-      <section className="how-section" id="how-it-works"><div className="eyebrow muted">A PRACTICE, NOT A PERFORMANCE</div><h2>Small steps add up.</h2><div className="steps"><article><span className="step-index">01</span><h3>Choose your take</h3><p>Upload a solo practice video from your device.</p></article><article><span className="step-index">02</span><h3>Notice the details</h3><p>Explore a sample report with moments and movement cues.</p></article><article><span className="step-index">03</span><h3>Try it your way</h3><p>Keep what resonates. Your practice belongs to you.</p></article></div></section>
+      {activePage === "coaching" && <section className="workspace coaching-workspace" id="studio"><div className="coaching-heading"><div className="eyebrow muted">COACHING</div><h1>{profile === "student" ? "Your coaching space." : "Guide every next step."}</h1><p>{profile === "student" ? "Review your sessions, feedback, and next steps." : "Manage student sessions, respond to connection requests, and turn teacher feedback into action."}</p></div><SessionPanel role={profile} onRoleChange={setProfile} videoFile={videoFile} onSessionChange={(session) => setActiveSessionId(session?.id ?? null)} /><div id="coaching"><TeacherFeedbackPanel sessionId={activeSessionId} role={profile} /></div></section>}
+      {activePage === "profile" && <ProfilePage required={profileRequired} onComplete={() => { setProfileRequired(false); }} />}
+
       <footer><a className="brand footer-brand" href="#top"><span className="brand-mark">o.</span><span>one</span></a><span>Practice with curiosity. âœ³</span><span>Clips are sent to Gemini only when you choose its critique action.</span></footer>
     </main>
   );

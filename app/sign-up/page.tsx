@@ -11,7 +11,6 @@ function readableError(error: { message?: string } | null | undefined) {
 
 export default function SignUpPage() {
   const router = useRouter();
-  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<"student" | "teacher">("student");
@@ -26,7 +25,8 @@ export default function SignUpPage() {
     }
     setSubmitting(true);
     setError("");
-    const { error: signUpError } = await authClient.signUp.email({ name, email, password });
+    const accountName = email.trim().split("@")[0] || "One member";
+    const { error: signUpError } = await authClient.signUp.email({ name: accountName, email, password });
     if (signUpError) {
       setError(readableError(signUpError));
       setSubmitting(false);
@@ -43,7 +43,7 @@ export default function SignUpPage() {
       setSubmitting(false);
       return;
     }
-    router.replace("/");
+    router.replace("/?page=profile&required=1");
     router.refresh();
   }
 
@@ -55,7 +55,6 @@ export default function SignUpPage() {
         <p className="auth-copy">Start keeping your practice sessions and feedback in one place.</p>
         {error && <p className="auth-error" role="alert">{error}</p>}
         <form onSubmit={submit} className="auth-form">
-          <label>Name<input autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} required /></label>
           <label>Email<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
           <label>Password<input type="password" autoComplete="new-password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
           <fieldset className="role-picker"><legend>I am joining as a</legend><label><input type="radio" name="role" value="student" checked={role === "student"} onChange={() => setRole("student")} /> Student</label><label><input type="radio" name="role" value="teacher" checked={role === "teacher"} onChange={() => setRole("teacher")} /> Teacher</label></fieldset>

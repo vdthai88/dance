@@ -170,6 +170,14 @@ export function openDanceDatabase() {
       decided_at TEXT,
       CHECK ((target_type = 'teacher' AND target_user_id IS NOT NULL AND target_company_id IS NULL) OR (target_type = 'company' AND target_company_id IS NOT NULL AND target_user_id IS NULL))
     );
+    CREATE TABLE IF NOT EXISTS user_profiles (
+      user_id TEXT PRIMARY KEY,
+      first_name TEXT NOT NULL DEFAULT '',
+      last_name TEXT NOT NULL DEFAULT '',
+      organization_name TEXT NOT NULL DEFAULT '',
+      birth_year INTEGER,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_request_open
       ON connection_requests(student_id, target_type, target_user_id, target_company_id, status);
     CREATE INDEX IF NOT EXISTS idx_invitations_token ON invitations(token);
@@ -206,6 +214,13 @@ export function openDanceDatabase() {
   }
   if (!columns.some((column) => column.name === "newer_filename")) {
     db.exec("ALTER TABLE critiques ADD COLUMN newer_filename TEXT");
+  }
+  const userProfileColumns = db.prepare("PRAGMA table_info(user_profiles)").all() as Array<{ name: string }>;
+  if (!userProfileColumns.some((column) => column.name === "birth_year")) {
+    db.exec("ALTER TABLE user_profiles ADD COLUMN birth_year INTEGER");
+    if (userProfileColumns.some((column) => column.name === "birthdate")) {
+      db.exec("UPDATE user_profiles SET birth_year = CAST(substr(birthdate, 1, 4) AS INTEGER) WHERE birth_year IS NULL AND birthdate IS NOT NULL");
+    }
   }
   return db;
 }

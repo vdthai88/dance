@@ -8,8 +8,10 @@ export type TeacherOrganization = { id: string; name: string; type: "studio" | "
 export type LocalTeacherProfile = { isCompanyOwner: boolean; companyRole: "owner" | "admin" | "teacher" | "staff" | null };
 export type CompanyMember = { userId: string; name: string; email: string | null; role: "owner" | "admin" | "teacher" | "staff"; joinedAt: string };
 export type Invitation = { token: string; email: string; role: "teacher" | "student"; studentId: string | null; status: "pending" | "accepted" | "revoked"; expiresAt: string; createdAt: string };
-export type ConnectionOption = { type: "teacher" | "company"; id: string; name: string };
+export type ConnectionOption = { type: "teacher" | "company"; id: string; name: string; companyName: string | null };
 export type ConnectionRequest = { id: string; studentName: string; targetName: string; targetType: "teacher" | "company"; requestedAt: string };
+export type StudentCompany = { id: string; name: string; type: "studio" | "private_company" | "other" };
+export type UserProfile = { firstName: string; lastName: string; organizationName: string; birthYear: number | null };
 export type PracticeSession = {
   id: string;
   studentId: string;
@@ -47,6 +49,61 @@ export function chooseAccountRole(userId: string, role: "student" | "teacher") {
   const db = openDanceDatabase();
   try {
     assignRole(db, userId, role);
+    // A person using the Student role is their own student profile. They do not
+    // need to wait for a teacher invitation before they can see their sessions.
+    if (role === "student") ensureStudentProfile(db, userId);
+  } finally { db.close(); }
+}
+
+export function getAccountRoles(userId: string): Array<"student" | "teacher" | "admin"> {
+  const db = openDanceDatabase();
+  try {
+    return (db.prepare("SELECT role_id FROM user_roles WHERE user_id = ? ORDER BY role_id").all(userId) as Array<{ role_id: "student" | "teacher" | "admin" }>).map((row) => row.role_id);
+  } finally { db.close(); }
+}
+
+export function getUserProfile(userId: string): UserProfile {
+  const db = openDanceDatabase();
+  try {
+    const row = db.prepare("SELECT first_name, last_name, organization_name, birth_year FROM user_profiles WHERE user_id = ?").get(userId) as { first_name: string; last_name: string; organization_name: string; birth_year: number | null } | undefined;
+    return row ? { firstName: row.first_name, lastName: row.last_name, organizationName: row.organization_name, birthYear: row.birth_year } : { firstName: "", lastName: "", organizationName: "", birthYear: null };
+  } finally { db.close(); }
+}
+
+function studentDisplayName(db: ReturnType<typeof openDanceDatabase>, userId: string) {
+  const profile = db.prepare("SELECT first_name, last_name FROM user_profiles WHERE user_id = ?").get(userId) as { first_name: string; last_name: string } | undefined;
+  const account = db.prepare('SELECT name FROM "user" WHERE id = ?').get(userId) as { name: string } | undefined;
+  return [profile?.first_name, profile?.last_name].filter(Boolean).join(" ").trim() || account?.name?.trim() || "Student";
+}
+
+function uniqueStudentDisplayName(db: ReturnType<typeof openDanceDatabase>, userId: string, name: string) {
+  const usedByAnotherStudent = db.prepare("SELECT 1 FROM students WHERE display_name = ? AND (user_id IS NULL OR user_id <> ?)").get(name, userId);
+  return usedByAnotherStudent ? `${name} (${userId.slice(0, 6)})` : name;
+}
+
+function ensureStudentProfile(db: ReturnType<typeof openDanceDatabase>, userId: string) {
+  const existing = db.prepare("SELECT id FROM students WHERE user_id = ?").get(userId) as { id: string } | undefined;
+  if (existing) return existing.id;
+  const name = uniqueStudentDisplayName(db, userId, studentDisplayName(db, userId));
+  const id = randomUUID();
+  db.prepare("INSERT INTO students (id, display_name, user_id) VALUES (?, ?, ?)").run(id, name, userId);
+  return id;
+}
+
+export function saveUserProfile(userId: string, profile: UserProfile): UserProfile {
+  const db = openDanceDatabase();
+  try {
+    db.prepare(`INSERT INTO user_profiles (user_id, first_name, last_name, organization_name, birth_year, updated_at)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(user_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name, organization_name = excluded.organization_name, birth_year = excluded.birth_year, updated_at = CURRENT_TIMESTAMP`)
+      .run(userId, profile.firstName, profile.lastName, profile.organizationName, profile.birthYear);
+    const isStudent = Boolean(db.prepare("SELECT 1 FROM user_roles WHERE user_id = ? AND role_id = 'student'").get(userId));
+    if (isStudent) {
+      const studentId = ensureStudentProfile(db, userId);
+      const name = uniqueStudentDisplayName(db, userId, studentDisplayName(db, userId));
+      db.prepare("UPDATE students SET display_name = ? WHERE id = ?").run(name, studentId);
+    }
+    return profile;
   } finally { db.close(); }
 }
 
@@ -134,6 +191,10 @@ function mapStudentRows(rows: Array<{ id: string; display_name: string; organiza
 export function listStudentsForUser(userId: string): StudentProfile[] {
   const db = openDanceDatabase();
   try {
+    // Accounts created before this rule existed may already have the Student
+    // role but no matching row in students, so repair that safely on first use.
+    const hasStudentRole = Boolean(db.prepare("SELECT 1 FROM user_roles WHERE user_id = ? AND role_id = 'student'").get(userId));
+    if (hasStudentRole) ensureStudentProfile(db, userId);
     return mapStudentRows(db.prepare(`SELECT s.id, s.display_name, s.organization_id, o.display_name AS organization_name, s.created_at
       FROM students s LEFT JOIN organizations o ON o.id = s.organization_id WHERE s.user_id = ?
       ORDER BY s.display_name COLLATE NOCASE`).all(userId) as Array<{
@@ -155,6 +216,24 @@ export function listStudentsForTeacher(userId: string): StudentProfile[] {
       ORDER BY s.display_name COLLATE NOCASE`).all(userId, userId) as Array<{
         id: string; display_name: string; organization_id: string | null; organization_name: string | null; created_at: string;
       }>);
+  } finally { db.close(); }
+}
+
+export function listUserCompanies(userId: string): StudentCompany[] {
+  const db = openDanceDatabase();
+  try {
+    return db.prepare(`SELECT DISTINCT id, name, type FROM (
+      SELECT o.id, o.display_name AS name, o.organization_type AS type
+      FROM students s
+      JOIN student_company_assignments sca ON sca.student_id = s.id
+      JOIN organizations o ON o.id = sca.company_id
+      WHERE s.user_id = ?
+      UNION
+      SELECT o.id, o.display_name AS name, o.organization_type AS type
+      FROM company_memberships cm
+      JOIN organizations o ON o.id = cm.company_id
+      WHERE cm.user_id = ?
+    ) ORDER BY name COLLATE NOCASE`).all(userId, userId) as StudentCompany[];
   } finally { db.close(); }
 }
 
@@ -267,9 +346,29 @@ export function createStudent(input: { name: string; teacherUserId: string; orga
 export function listConnectionOptions(): ConnectionOption[] {
   const db = openDanceDatabase();
   try {
-    const teachers = db.prepare(`SELECT DISTINCT tp.user_id AS id, COALESCE(u.name, tp.display_name) AS name FROM teacher_profiles tp LEFT JOIN "user" u ON u.id = tp.user_id WHERE tp.user_id IS NOT NULL`).all() as Array<{ id: string; name: string }>;
+    const teachers = db.prepare(`SELECT DISTINCT tp.user_id AS id,
+      COALESCE(NULLIF(TRIM(up.first_name || ' ' || up.last_name), ''), NULLIF(TRIM(u.name), ''), NULLIF(TRIM(tp.display_name), ''), 'Teacher') AS name,
+      o.display_name AS company_name
+      FROM teacher_profiles tp LEFT JOIN "user" u ON u.id = tp.user_id
+      LEFT JOIN user_profiles up ON up.user_id = tp.user_id
+      LEFT JOIN company_memberships cm ON cm.user_id = tp.user_id AND cm.role IN ('owner', 'admin', 'teacher')
+      LEFT JOIN organizations o ON o.id = cm.company_id
+      WHERE tp.user_id IS NOT NULL ORDER BY company_name COLLATE NOCASE, name COLLATE NOCASE`).all() as Array<{ id: string; name: string; company_name: string | null }>;
     const companies = db.prepare("SELECT id, display_name AS name FROM organizations ORDER BY display_name COLLATE NOCASE").all() as Array<{ id: string; name: string }>;
-    return [...teachers.map((teacher) => ({ type: "teacher" as const, id: teacher.id, name: teacher.name })), ...companies.map((company) => ({ type: "company" as const, id: company.id, name: company.name }))];
+    return [...teachers.map((teacher) => ({ type: "teacher" as const, id: teacher.id, name: teacher.name, companyName: teacher.company_name })), ...companies.map((company) => ({ type: "company" as const, id: company.id, name: company.name, companyName: company.name }))];
+  } finally { db.close(); }
+}
+
+export function listStudentPendingConnectionRequests(userId: string): ConnectionRequest[] {
+  const db = openDanceDatabase();
+  try {
+    return (db.prepare(`SELECT cr.id, s.display_name AS student_name, cr.target_type, cr.requested_at,
+      COALESCE(NULLIF(TRIM(up.first_name || ' ' || up.last_name), ''), NULLIF(TRIM(tu.name), ''), NULLIF(TRIM(tp.display_name), ''), o.display_name, 'Unknown recipient') AS target_name
+      FROM connection_requests cr JOIN students s ON s.id = cr.student_id
+      LEFT JOIN teacher_profiles tp ON tp.user_id = cr.target_user_id LEFT JOIN "user" tu ON tu.id = cr.target_user_id
+      LEFT JOIN user_profiles up ON up.user_id = cr.target_user_id
+      LEFT JOIN organizations o ON o.id = cr.target_company_id
+      WHERE s.user_id = ? AND cr.status = 'pending' ORDER BY cr.requested_at DESC`).all(userId) as Array<{ id: string; student_name: string; target_type: "teacher" | "company"; requested_at: string; target_name: string }>).map((row) => ({ id: row.id, studentName: row.student_name, targetType: row.target_type, targetName: row.target_name, requestedAt: row.requested_at }));
   } finally { db.close(); }
 }
 
@@ -290,9 +389,10 @@ export function listPendingConnectionRequests(userId: string): ConnectionRequest
   const db = openDanceDatabase();
   try {
     return (db.prepare(`SELECT cr.id, s.display_name AS student_name, cr.target_type, cr.requested_at,
-      COALESCE(tu.name, tp.display_name, o.display_name) AS target_name
+      COALESCE(NULLIF(TRIM(up.first_name || ' ' || up.last_name), ''), NULLIF(TRIM(tu.name), ''), NULLIF(TRIM(tp.display_name), ''), o.display_name, 'Unknown recipient') AS target_name
       FROM connection_requests cr JOIN students s ON s.id = cr.student_id
       LEFT JOIN teacher_profiles tp ON tp.user_id = cr.target_user_id LEFT JOIN "user" tu ON tu.id = cr.target_user_id
+      LEFT JOIN user_profiles up ON up.user_id = cr.target_user_id
       LEFT JOIN organizations o ON o.id = cr.target_company_id
       LEFT JOIN company_memberships cm ON cm.company_id = cr.target_company_id AND cm.user_id = ?
       WHERE cr.status = 'pending' AND (cr.target_user_id = ? OR cm.role IN ('owner', 'admin')) ORDER BY cr.requested_at DESC`).all(userId, userId) as Array<{ id: string; student_name: string; target_type: "teacher" | "company"; requested_at: string; target_name: string }>).map((row) => ({ id: row.id, studentName: row.student_name, targetType: row.target_type, targetName: row.target_name, requestedAt: row.requested_at }));
@@ -308,8 +408,14 @@ export function decideConnectionRequest(userId: string, requestId: string, accep
     if (!allowed) return false;
     db.exec("BEGIN IMMEDIATE");
     if (accept) {
-      if (request.target_type === "teacher") db.prepare("INSERT OR IGNORE INTO student_teacher_assignments (student_id, teacher_user_id, permission) VALUES (?, ?, 'manage')").run(request.student_id, request.target_user_id);
-      else db.prepare("INSERT OR IGNORE INTO student_company_assignments (student_id, company_id, permission) VALUES (?, ?, 'manage')").run(request.student_id, request.target_company_id);
+      if (request.target_type === "teacher") {
+        db.prepare("INSERT OR IGNORE INTO student_teacher_assignments (student_id, teacher_user_id, permission) VALUES (?, ?, 'manage')").run(request.student_id, request.target_user_id);
+        const teacherCompany = db.prepare("SELECT organization_id FROM teacher_profiles WHERE user_id = ?").get(request.target_user_id) as { organization_id: string | null } | undefined;
+        if (teacherCompany?.organization_id) {
+          db.prepare("INSERT OR IGNORE INTO student_company_assignments (student_id, company_id, permission) VALUES (?, ?, 'manage')").run(request.student_id, teacherCompany.organization_id);
+          db.prepare("UPDATE students SET organization_id = COALESCE(organization_id, ?) WHERE id = ?").run(teacherCompany.organization_id, request.student_id);
+        }
+      } else db.prepare("INSERT OR IGNORE INTO student_company_assignments (student_id, company_id, permission) VALUES (?, ?, 'manage')").run(request.student_id, request.target_company_id);
     }
     db.prepare("UPDATE connection_requests SET status = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ?").run(accept ? "accepted" : "declined", requestId);
     db.exec("COMMIT"); return true;
