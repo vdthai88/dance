@@ -85,11 +85,11 @@ async function readAudio(file: File, onProgress: (fraction: number) => void) {
       };
       requestAnimationFrame(sample);
     });
-    if (!hasAudioSignal) throw new Error(`No audio signal was detected in ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œ${file.name}ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â. Confirm this clip has audible sound, then retry.`);
+    if (!hasAudioSignal) throw new Error(`No audio signal was detected in "${file.name}". Confirm this clip has audible sound, then retry.`);
     return { duration: scanDuration, levels };
   } catch (error) {
     if (error instanceof Error && /No audio signal|no readable duration/i.test(error.message)) throw error;
-    throw new Error(`Could not read one videoÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢s audio in this browser. Try an MP4 with AAC audio. ${error instanceof Error ? error.message : ""}`.trim());
+    throw new Error(`Could not read one video's audio in this browser. Try an MP4 with AAC audio. ${error instanceof Error ? error.message : ""}`.trim());
   } finally {
     video.pause();
     video.removeAttribute("src");
