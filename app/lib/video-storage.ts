@@ -1,3 +1,4 @@
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 
@@ -19,10 +20,36 @@ function safeSegment(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "video";
 }
 
-function assertLocalStorage() {
-  if ((process.env.VIDEO_STORAGE_DRIVER || "local") !== "local") {
-    throw new Error("The configured video storage driver is not available yet.");
+type VideoStorageDriver = "local" | "r2";
+
+function configuredDriver(): VideoStorageDriver {
+  const value = process.env.VIDEO_STORAGE_DRIVER || "local";
+  if (value === "local" || value === "r2") return value;
+  throw new Error(`Unsupported VIDEO_STORAGE_DRIVER: ${value}. Use local or r2.`);
+}
+
+function r2Config() {
+  const accountId = process.env.R2_ACCOUNT_ID;
+  const bucket = process.env.R2_BUCKET;
+  const accessKeyId = process.env.R2_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+  const endpoint = process.env.R2_ENDPOINT || (accountId ? `https://${accountId}.r2.cloudflarestorage.com` : undefined);
+  if (!bucket || !accessKeyId || !secretAccessKey || !endpoint) {
+    throw new Error("R2 storage requires R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and R2_ENDPOINT (or R2_ACCOUNT_ID).");
   }
+  return { bucket, accessKeyId, secretAccessKey, endpoint };
+}
+
+function r2Client() {
+  const config = r2Config();
+  return {
+    bucket: config.bucket,
+    client: new S3Client({
+      region: "auto",
+      endpoint: config.endpoint,
+      credentials: { accessKeyId: config.accessKeyId, secretAccessKey: config.secretAccessKey },
+    }),
+  };
 }
 
 export function localVideoObjectKey(input: LocalVideoWrite) {
@@ -42,8 +69,18 @@ function localPath(objectKey: string) {
 }
 
 export async function saveLocalVideo(input: LocalVideoWrite) {
-  assertLocalStorage();
   const objectKey = localVideoObjectKey(input);
+  if (configuredDriver() === "r2") {
+    const { bucket, client } = r2Client();
+    await client.send(new PutObjectCommand({
+      Bucket: bucket,
+      Key: objectKey,
+      Body: input.bytes,
+      ContentType: mimeTypeForFilename(input.filename),
+      Metadata: { "original-filename": safeMetadata(input.filename), sha256: input.hash },
+    }));
+    return objectKey;
+  }
   const destination = localPath(objectKey);
   await mkdir(resolve(destination, ".."), { recursive: true });
   const temporary = `${destination}.${process.pid}.${Date.now()}.uploading`;
@@ -53,11 +90,30 @@ export async function saveLocalVideo(input: LocalVideoWrite) {
 }
 
 export async function readLocalVideo(objectKey: string) {
-  assertLocalStorage();
+  if (configuredDriver() === "r2") {
+    const { bucket, client } = r2Client();
+    const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: objectKey }));
+    if (!result.Body) throw new Error("R2 returned an empty video object.");
+    return new Uint8Array(await result.Body.transformToByteArray());
+  }
   return readFile(localPath(objectKey));
 }
 
 export async function deleteLocalVideo(objectKey: string | null) {
   if (!objectKey) return;
+  if (configuredDriver() === "r2") {
+    const { bucket, client } = r2Client();
+    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: objectKey }));
+    return;
+  }
   await rm(localPath(objectKey), { force: true });
+}
+
+function mimeTypeForFilename(filename: string) {
+  const extension = basename(filename).split(".").pop()?.toLowerCase();
+  return extension === "mov" ? "video/quicktime" : extension === "webm" ? "video/webm" : "video/mp4";
+}
+
+function safeMetadata(value: string) {
+  return value.replace(/[\r\n]/g, " ").slice(0, 1024);
 }

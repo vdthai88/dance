@@ -14,7 +14,7 @@ export async function GET(request: Request, context: { params: Promise<{ session
   const hasAccess = await pgCanAccessSession(user.id, sessionId, true) || await pgCanAccessSession(user.id, sessionId, false);
   if (!hasAccess) return NextResponse.json({ error: "You do not have access to this session." }, { status: 403 });
   const video = await findPgSessionVideo(sessionId, hash);
-  if (!video || video.storageStatus !== "ready" || !video.objectKey) return NextResponse.json({ error: "This video was not stored locally. Upload it again to play it." }, { status: 404 });
+  if (!video || video.storageStatus !== "ready" || !video.objectKey) return NextResponse.json({ error: "This video is not available in storage. Upload it again to play it." }, { status: 404 });
   try {
     const bytes = await readLocalVideo(video.objectKey);
     return new NextResponse(bytes, { headers: {
@@ -24,6 +24,6 @@ export async function GET(request: Request, context: { params: Promise<{ session
       "Cache-Control": "private, no-store",
     } });
   } catch {
-    return NextResponse.json({ error: "The local video file is missing. Upload it again to restore playback." }, { status: 404 });
+    return NextResponse.json({ error: "The stored video file is missing. Upload it again to restore playback." }, { status: 404 });
   }
 }

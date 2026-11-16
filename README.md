@@ -49,6 +49,29 @@ The local pose preview does not upload the clip. Choosing **Send to Gemini** sen
 
 Unless an exact-file critique is already saved locally, choosing **Send to Gemini** sends the video to Google's Gemini API. A validated response is saved in SQLite, and any temporary Gemini Files API uploads are deleted after the response.
 
+## Video storage
+
+Local development uses the gitignored `data/uploads/` folder by default:
+
+```env
+VIDEO_STORAGE_DRIVER=local
+LOCAL_UPLOAD_DIR=./data/uploads
+```
+
+For a deployed environment, the same application can store session videos in a private Cloudflare R2 bucket. Create an R2 API token restricted to **Object Read & Write** for that bucket, set the values below in the host's environment settings, and switch the driver:
+
+```env
+VIDEO_STORAGE_DRIVER=r2
+R2_ACCOUNT_ID=your_cloudflare_account_id
+R2_BUCKET=one-dance-videos-production
+R2_ACCESS_KEY_ID=your_r2_access_key_id
+R2_SECRET_ACCESS_KEY=your_r2_secret_access_key
+# Optional when R2_ACCOUNT_ID is set:
+R2_ENDPOINT=https://your_cloudflare_account_id.r2.cloudflarestorage.com
+```
+
+The bucket remains private. The app checks session access before it retrieves a stored video, so do not configure a public bucket for practice videos. Keep `VIDEO_STORAGE_DRIVER=local` on your computer; no R2 account or credentials are needed to develop locally.
+
 ## Limits of these estimates
 
 The measurements are simple computer-vision proxies, not validated dance grades or instructor feedback. The pose model can miss joints when the dancer is occluded, out of frame or poorly lit. Beat detection uses an approximate audio-energy method, and the pose samples are too sparse for precise choreography timing. Treat the notes as prompts to review, not definitive corrections.
