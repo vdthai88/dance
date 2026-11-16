@@ -7,17 +7,23 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "node scripts/migrate-postgres.mjs",
+    "db:validate": "node scripts/validate-postgres.mjs",
+    "db:import-sqlite": "node scripts/migrate-sqlite-to-postgres.mjs",
+    "db:validate-import": "node scripts/validate-sqlite-import.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.1.1",
     "better-auth": "^1.7.19",
     "next": "^16.4.2",
+    "pg": "^8.23.1",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "eslint": "^9.39.5",

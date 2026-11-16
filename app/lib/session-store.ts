@@ -4,18 +4,21 @@ import type { DanceCritique, TeacherFeedback } from "./gemini-critique";
 import { isDanceCritique, isTeacherFeedback } from "./gemini-critique";
 
 export type StudentProfile = { id: string; name: string; organizationId: string | null; organizationName: string | null; createdAt: string };
-export type TeacherOrganization = { id: string; name: string; type: "studio" | "private_company" | "other" };
+export type TeacherOrganization = { id: string; name: string; type: "studio" | "private_company" | "other"; isDefault?: boolean };
 export type LocalTeacherProfile = { isCompanyOwner: boolean; companyRole: "owner" | "admin" | "teacher" | "staff" | null };
 export type CompanyMember = { userId: string; name: string; email: string | null; role: "owner" | "admin" | "teacher" | "staff"; joinedAt: string };
 export type Invitation = { token: string; email: string; role: "teacher" | "student"; studentId: string | null; status: "pending" | "accepted" | "revoked"; expiresAt: string; createdAt: string };
 export type ConnectionOption = { type: "teacher" | "company"; id: string; name: string; companyName: string | null };
 export type ConnectionRequest = { id: string; studentName: string; targetName: string; targetType: "teacher" | "company"; requestedAt: string };
 export type StudentCompany = { id: string; name: string; type: "studio" | "private_company" | "other" };
+export type CompanyJoinRequest = { id: string; companyId: string; companyName: string; requesterName: string; requestedAt: string };
 export type UserProfile = { firstName: string; lastName: string; organizationName: string; birthYear: number | null };
 export type PracticeSession = {
   id: string;
   studentId: string;
   studentName: string;
+  companyId: string | null;
+  name: string;
   sessionDate: string;
   location: string;
   createdAt: string;
@@ -184,6 +187,77 @@ export function associateTeacherWithOrganization(userId: string, input: { name: 
   } finally { db.close(); }
 }
 
+export function listCompanies(): TeacherOrganization[] {
+  const db = openDanceDatabase();
+  try {
+    return (db.prepare("SELECT id, display_name, organization_type FROM organizations ORDER BY display_name COLLATE NOCASE").all() as Array<{ id: string; display_name: string; organization_type: TeacherOrganization["type"] }>)
+      .map((company) => ({ id: company.id, name: company.display_name, type: company.organization_type }));
+  } finally { db.close(); }
+}
+
+export function createCompanyForTeacher(userId: string, input: { name: string; type: TeacherOrganization["type"] }): TeacherOrganization | "exists" {
+  const db = openDanceDatabase();
+  try {
+    if (db.prepare("SELECT 1 FROM organizations WHERE display_name = ?").get(input.name.trim())) return "exists";
+    db.exec("BEGIN IMMEDIATE");
+    const id = randomUUID();
+    db.prepare("INSERT INTO organizations (id, display_name, organization_type) VALUES (?, ?, ?)").run(id, input.name.trim(), input.type);
+    const profile = ensureTeacherProfile(db, userId);
+    db.prepare("UPDATE company_memberships SET is_default = 0 WHERE user_id = ?").run(userId);
+    db.prepare("INSERT INTO company_memberships (company_id, user_id, role, is_default) VALUES (?, ?, 'owner', 1)").run(id, userId);
+    db.prepare("UPDATE teacher_profiles SET organization_id = ? WHERE id = ?").run(id, profile.id);
+    db.exec("COMMIT");
+    return { id, name: input.name.trim(), type: input.type };
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch { /* No transaction was active. */ }
+    throw error;
+  } finally { db.close(); }
+}
+
+export function requestCompanyJoin(userId: string, companyId: string): "created" | "already_member" | "already_requested" | "missing" {
+  const db = openDanceDatabase();
+  try {
+    if (!db.prepare("SELECT 1 FROM organizations WHERE id = ?").get(companyId)) return "missing";
+    if (db.prepare("SELECT 1 FROM company_memberships WHERE company_id = ? AND user_id = ?").get(companyId, userId)) return "already_member";
+    if (db.prepare("SELECT 1 FROM company_join_requests WHERE company_id = ? AND requester_user_id = ? AND status = 'pending'").get(companyId, userId)) return "already_requested";
+    db.prepare("INSERT INTO company_join_requests (id, company_id, requester_user_id) VALUES (?, ?, ?)").run(randomUUID(), companyId, userId);
+    return "created";
+  } finally { db.close(); }
+}
+
+export function listPendingCompanyJoinRequests(userId: string): CompanyJoinRequest[] {
+  const db = openDanceDatabase();
+  try {
+    return (db.prepare(`SELECT r.id, r.company_id, o.display_name AS company_name, r.requested_at,
+      COALESCE(NULLIF(TRIM(up.first_name || ' ' || up.last_name), ''), NULLIF(TRIM(u.name), ''), 'Teacher') AS requester_name
+      FROM company_join_requests r
+      JOIN company_memberships cm ON cm.company_id = r.company_id AND cm.user_id = ? AND cm.role IN ('owner', 'admin')
+      JOIN organizations o ON o.id = r.company_id
+      LEFT JOIN "user" u ON u.id = r.requester_user_id
+      LEFT JOIN user_profiles up ON up.user_id = r.requester_user_id
+      WHERE r.status = 'pending' ORDER BY r.requested_at DESC`).all(userId) as Array<{ id: string; company_id: string; company_name: string; requester_name: string; requested_at: string }>)
+      .map((request) => ({ id: request.id, companyId: request.company_id, companyName: request.company_name, requesterName: request.requester_name, requestedAt: request.requested_at }));
+  } finally { db.close(); }
+}
+
+export function decideCompanyJoinRequest(userId: string, requestId: string, accept: boolean): boolean {
+  const db = openDanceDatabase();
+  try {
+    const request = db.prepare("SELECT company_id, requester_user_id FROM company_join_requests WHERE id = ? AND status = 'pending'").get(requestId) as { company_id: string; requester_user_id: string } | undefined;
+    if (!request || !db.prepare("SELECT 1 FROM company_memberships WHERE company_id = ? AND user_id = ? AND role IN ('owner', 'admin')").get(request.company_id, userId)) return false;
+    db.exec("BEGIN IMMEDIATE");
+    if (accept) {
+      db.prepare("INSERT OR IGNORE INTO company_memberships (company_id, user_id, role) VALUES (?, ?, 'teacher')").run(request.company_id, request.requester_user_id);
+        const hasDefaultCompany = Boolean(db.prepare("SELECT 1 FROM company_memberships WHERE user_id = ? AND is_default = 1").get(request.requester_user_id));
+        if (!hasDefaultCompany) db.prepare("UPDATE company_memberships SET is_default = 1 WHERE company_id = ? AND user_id = ?").run(request.company_id, request.requester_user_id);
+      const profile = ensureTeacherProfile(db, request.requester_user_id);
+      db.prepare("UPDATE teacher_profiles SET organization_id = COALESCE(organization_id, ?) WHERE id = ?").run(request.company_id, profile.id);
+    }
+    db.prepare("UPDATE company_join_requests SET status = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ?").run(accept ? "accepted" : "declined", requestId);
+    db.exec("COMMIT"); return true;
+  } catch (error) { try { db.exec("ROLLBACK"); } catch { /* No transaction was active. */ } throw error; } finally { db.close(); }
+}
+
 function mapStudentRows(rows: Array<{ id: string; display_name: string; organization_id: string | null; organization_name: string | null; created_at: string }>): StudentProfile[] {
   return rows.map((row) => ({ id: row.id, name: row.display_name, organizationId: row.organization_id, organizationName: row.organization_name, createdAt: row.created_at }));
 }
@@ -203,9 +277,17 @@ export function listStudentsForUser(userId: string): StudentProfile[] {
   } finally { db.close(); }
 }
 
-export function listStudentsForTeacher(userId: string): StudentProfile[] {
+export function listStudentsForTeacher(userId: string, companyId?: string | null): StudentProfile[] {
   const db = openDanceDatabase();
   try {
+    if (companyId) {
+      return mapStudentRows(db.prepare(`SELECT DISTINCT s.id, s.display_name, s.organization_id, o.display_name AS organization_name, s.created_at
+        FROM students s JOIN student_company_assignments sca ON sca.student_id = s.id
+        LEFT JOIN organizations o ON o.id = s.organization_id
+        JOIN company_memberships cm ON cm.company_id = sca.company_id AND cm.user_id = ?
+        WHERE sca.company_id = ? AND cm.role IN ('owner', 'admin', 'teacher')
+        ORDER BY s.display_name COLLATE NOCASE`).all(userId, companyId) as Array<{ id: string; display_name: string; organization_id: string | null; organization_name: string | null; created_at: string }>);
+    }
     return mapStudentRows(db.prepare(`SELECT DISTINCT s.id, s.display_name, s.organization_id, o.display_name AS organization_name, s.created_at
       FROM students s
       LEFT JOIN organizations o ON o.id = s.organization_id
@@ -237,10 +319,50 @@ export function listUserCompanies(userId: string): StudentCompany[] {
   } finally { db.close(); }
 }
 
-export function canAccessStudent(userId: string, studentId: string, asTeacher: boolean): boolean {
+export function listStudentCompanies(userId: string): StudentCompany[] {
   const db = openDanceDatabase();
   try {
-    if (!asTeacher) return Boolean(db.prepare("SELECT 1 FROM students WHERE id = ? AND user_id = ?").get(studentId, userId));
+    return db.prepare(`SELECT DISTINCT o.id, o.display_name AS name, o.organization_type AS type
+      FROM students s
+      JOIN student_company_assignments sca ON sca.student_id = s.id
+      JOIN organizations o ON o.id = sca.company_id
+      WHERE s.user_id = ?
+      ORDER BY o.display_name COLLATE NOCASE`).all(userId) as StudentCompany[];
+  } finally { db.close(); }
+}
+
+export function listTeacherCompanies(userId: string): TeacherOrganization[] {
+  const db = openDanceDatabase();
+  try {
+    return (db.prepare(`SELECT o.id, o.display_name, o.organization_type, cm.is_default
+      FROM company_memberships cm JOIN organizations o ON o.id = cm.company_id
+      WHERE cm.user_id = ? AND cm.role IN ('owner', 'admin', 'teacher') ORDER BY o.display_name COLLATE NOCASE`).all(userId) as Array<{ id: string; display_name: string; organization_type: TeacherOrganization["type"]; is_default: number }>).map((company) => ({ id: company.id, name: company.display_name, type: company.organization_type, isDefault: company.is_default === 1 }));
+  } finally { db.close(); }
+}
+
+export function setDefaultTeacherCompany(userId: string, companyId: string): boolean {
+  const db = openDanceDatabase();
+  try {
+    if (!db.prepare("SELECT 1 FROM company_memberships WHERE company_id = ? AND user_id = ? AND role IN ('owner', 'admin', 'teacher')").get(companyId, userId)) return false;
+    db.exec("BEGIN IMMEDIATE");
+    db.prepare("UPDATE company_memberships SET is_default = 0 WHERE user_id = ?").run(userId);
+    db.prepare("UPDATE company_memberships SET is_default = 1 WHERE company_id = ? AND user_id = ?").run(companyId, userId);
+    db.exec("COMMIT"); return true;
+  } catch (error) { try { db.exec("ROLLBACK"); } catch { /* No transaction was active. */ } throw error; } finally { db.close(); }
+}
+
+export function canAccessStudent(userId: string, studentId: string, asTeacher: boolean, companyId?: string | null): boolean {
+  const db = openDanceDatabase();
+  try {
+    if (!asTeacher) {
+      if (!companyId) return Boolean(db.prepare("SELECT 1 FROM students WHERE id = ? AND user_id = ?").get(studentId, userId));
+      return Boolean(db.prepare(`SELECT 1 FROM students s
+        JOIN student_company_assignments sca ON sca.student_id = s.id
+        WHERE s.id = ? AND s.user_id = ? AND sca.company_id = ?`).get(studentId, userId, companyId));
+    }
+    if (companyId) return Boolean(db.prepare(`SELECT 1 FROM student_company_assignments sca
+      JOIN company_memberships cm ON cm.company_id = sca.company_id AND cm.user_id = ?
+      WHERE sca.student_id = ? AND sca.company_id = ? AND cm.role IN ('owner', 'admin', 'teacher')`).get(userId, studentId, companyId));
     return Boolean(db.prepare(`SELECT 1 FROM students s
       LEFT JOIN student_teacher_assignments sta ON sta.student_id = s.id AND sta.teacher_user_id = ?
       LEFT JOIN student_company_assignments sca ON sca.student_id = s.id
@@ -415,46 +537,62 @@ export function decideConnectionRequest(userId: string, requestId: string, accep
           db.prepare("INSERT OR IGNORE INTO student_company_assignments (student_id, company_id, permission) VALUES (?, ?, 'manage')").run(request.student_id, teacherCompany.organization_id);
           db.prepare("UPDATE students SET organization_id = COALESCE(organization_id, ?) WHERE id = ?").run(teacherCompany.organization_id, request.student_id);
         }
-      } else db.prepare("INSERT OR IGNORE INTO student_company_assignments (student_id, company_id, permission) VALUES (?, ?, 'manage')").run(request.student_id, request.target_company_id);
+      } else {
+        db.prepare("INSERT OR IGNORE INTO student_company_assignments (student_id, company_id, permission) VALUES (?, ?, 'manage')").run(request.student_id, request.target_company_id);
+        db.prepare("UPDATE students SET organization_id = COALESCE(organization_id, ?) WHERE id = ?").run(request.target_company_id, request.student_id);
+      }
     }
     db.prepare("UPDATE connection_requests SET status = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ?").run(accept ? "accepted" : "declined", requestId);
     db.exec("COMMIT"); return true;
   } catch (error) { try { db.exec("ROLLBACK"); } catch {} throw error; } finally { db.close(); }
 }
 
-export function listSessions(studentId: string): PracticeSession[] {
+export function cancelConnectionRequest(userId: string, requestId: string): boolean {
   const db = openDanceDatabase();
   try {
-    return (db.prepare(`SELECT s.id, s.student_id, p.display_name AS student_name, s.session_date, s.location, s.created_at
+    return db.prepare(`DELETE FROM connection_requests
+      WHERE id = ? AND status = 'pending' AND student_id IN (SELECT id FROM students WHERE user_id = ?)`)
+      .run(requestId, userId).changes > 0;
+  } finally { db.close(); }
+}
+
+export function listSessions(studentId: string, companyId?: string | null): PracticeSession[] {
+  const db = openDanceDatabase();
+  try {
+    const rows = companyId
+      ? db.prepare(`SELECT s.id, s.student_id, s.company_id, p.display_name AS student_name, s.session_name, s.session_date, s.location, s.created_at
+          FROM practice_sessions s JOIN students p ON p.id = s.student_id WHERE s.student_id = ? AND s.company_id = ? ORDER BY s.session_date DESC, s.created_at DESC`).all(studentId, companyId)
+      : db.prepare(`SELECT s.id, s.student_id, s.company_id, p.display_name AS student_name, s.session_name, s.session_date, s.location, s.created_at
       FROM practice_sessions s JOIN students p ON p.id = s.student_id
-      WHERE s.student_id = ? ORDER BY s.session_date DESC, s.created_at DESC`).all(studentId) as Array<{
-        id: string; student_id: string; student_name: string; session_date: string; location: string; created_at: string;
-      }>).map((row) => ({
+      WHERE s.student_id = ? ORDER BY s.session_date DESC, s.created_at DESC`).all(studentId);
+    return (rows as Array<{ id: string; student_id: string; company_id: string | null; student_name: string; session_name: string; session_date: string; location: string; created_at: string }>).map((row) => ({
         id: row.id, studentId: row.student_id, studentName: row.student_name,
-        sessionDate: row.session_date, location: row.location, createdAt: row.created_at,
+        companyId: row.company_id, name: row.session_name || `${row.session_date} - ${row.student_name}`, sessionDate: row.session_date, location: row.location, createdAt: row.created_at,
       }));
   } finally { db.close(); }
 }
 
-export function createPracticeSession(input: { studentId: string; sessionDate: string; location: string }): PracticeSession | null {
+export function createPracticeSession(input: { studentId: string; companyId: string; sessionDate: string; location: string }): PracticeSession | null {
   const id = randomUUID();
   const db = openDanceDatabase();
   try {
-    const student = db.prepare("SELECT display_name FROM students WHERE id = ?").get(input.studentId) as { display_name: string } | undefined;
+    const student = db.prepare(`SELECT s.display_name, o.display_name AS organization_name
+      FROM students s LEFT JOIN organizations o ON o.id = ? WHERE s.id = ?`).get(input.companyId, input.studentId) as { display_name: string; organization_name: string | null } | undefined;
     if (!student) return null;
-    db.prepare("INSERT INTO practice_sessions (id, student_id, session_date, location) VALUES (?, ?, ?, ?)")
-      .run(id, input.studentId, input.sessionDate, input.location.trim());
+    const name = [input.sessionDate, student.display_name, student.organization_name].filter(Boolean).join(" - ");
+    db.prepare("INSERT INTO practice_sessions (id, student_id, company_id, session_name, session_date, location) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(id, input.studentId, input.companyId, name, input.sessionDate, input.location.trim());
     const row = db.prepare("SELECT created_at FROM practice_sessions WHERE id = ?").get(id) as { created_at: string };
-    return { id, studentId: input.studentId, studentName: student.display_name, sessionDate: input.sessionDate, location: input.location.trim(), createdAt: row.created_at };
+    return { id, studentId: input.studentId, studentName: student.display_name, companyId: input.companyId, name, sessionDate: input.sessionDate, location: input.location.trim(), createdAt: row.created_at };
   } finally { db.close(); }
 }
 
 export function getSessionSnapshot(sessionId: string): SessionSnapshot | null {
   const db = openDanceDatabase();
   try {
-    const row = db.prepare(`SELECT s.id, s.student_id, p.display_name AS student_name, s.session_date, s.location, s.created_at
+    const row = db.prepare(`SELECT s.id, s.student_id, s.company_id, p.display_name AS student_name, s.session_name, s.session_date, s.location, s.created_at
       FROM practice_sessions s JOIN students p ON p.id = s.student_id WHERE s.id = ?`).get(sessionId) as {
-        id: string; student_id: string; student_name: string; session_date: string; location: string; created_at: string;
+        id: string; student_id: string; company_id: string | null; student_name: string; session_name: string; session_date: string; location: string; created_at: string;
       } | undefined;
     if (!row) return null;
     const videos = (db.prepare(`SELECT video_sha256, video_filename, created_at FROM session_videos
@@ -487,7 +625,7 @@ export function getSessionSnapshot(sessionId: string): SessionSnapshot | null {
       } catch { db.prepare("DELETE FROM session_critiques WHERE session_id = ? AND cache_key = ?").run(sessionId, item.cache_key); }
     }
     return {
-      session: { id: row.id, studentId: row.student_id, studentName: row.student_name, sessionDate: row.session_date, location: row.location, createdAt: row.created_at },
+      session: { id: row.id, studentId: row.student_id, studentName: row.student_name, companyId: row.company_id, name: row.session_name || `${row.session_date} - ${row.student_name}`, sessionDate: row.session_date, location: row.location, createdAt: row.created_at },
       videos, teacherFeedback, aiCritiques,
     };
   } finally { db.close(); }
@@ -526,4 +664,30 @@ export function saveSessionTeacherFeedback(input: { sessionId: string; model: st
     const row = db.prepare("SELECT created_at FROM session_teacher_feedback WHERE id = ?").get(id) as { created_at: string };
     return { id, sessionId: input.sessionId, model: input.model, feedback: input.feedback, createdAt: row.created_at };
   } finally { db.close(); }
+}
+
+export function findSessionTeacherFeedback(id: string): SessionTeacherFeedback | null {
+  const db = openDanceDatabase();
+  try {
+    const row = db.prepare("SELECT id, session_id, model, feedback_json, created_at FROM session_teacher_feedback WHERE id = ?").get(id) as { id: string; session_id: string; model: string; feedback_json: string; created_at: string } | undefined;
+    if (!row) return null;
+    const feedback: unknown = JSON.parse(row.feedback_json);
+    return isTeacherFeedback(feedback) ? { id: row.id, sessionId: row.session_id, model: row.model, feedback, createdAt: row.created_at } : null;
+  } finally { db.close(); }
+}
+
+export function updateSessionTeacherFeedback(id: string, feedback: TeacherFeedback): SessionTeacherFeedback | null {
+  const db = openDanceDatabase();
+  try {
+    const existing = db.prepare("SELECT session_id, model, created_at FROM session_teacher_feedback WHERE id = ?").get(id) as { session_id: string; model: string; created_at: string } | undefined;
+    if (!existing) return null;
+    db.prepare("UPDATE session_teacher_feedback SET feedback_json = ? WHERE id = ?").run(JSON.stringify(feedback), id);
+    return { id, sessionId: existing.session_id, model: existing.model, feedback, createdAt: existing.created_at };
+  } finally { db.close(); }
+}
+
+export function deleteSessionTeacherFeedback(id: string): boolean {
+  const db = openDanceDatabase();
+  try { return db.prepare("DELETE FROM session_teacher_feedback WHERE id = ?").run(id).changes > 0; }
+  finally { db.close(); }
 }

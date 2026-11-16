@@ -54,9 +54,9 @@ export default function SignUpPage() {
         <h1 id="sign-up-title">Create your account</h1>
         <p className="auth-copy">Start keeping your practice sessions and feedback in one place.</p>
         {error && <p className="auth-error" role="alert">{error}</p>}
-        <form onSubmit={submit} className="auth-form">
-          <label>Email<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
-          <label>Password<input type="password" autoComplete="new-password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
+        <form action="/api/local-auth/sign-up" method="post" className="auth-form">
+          <label>Email<input name="email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
+          <label>Password<input name="password" type="password" autoComplete="new-password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
           <fieldset className="role-picker"><legend>I am joining as a</legend><label><input type="radio" name="role" value="student" checked={role === "student"} onChange={() => setRole("student")} /> Student</label><label><input type="radio" name="role" value="teacher" checked={role === "teacher"} onChange={() => setRole("teacher")} /> Teacher</label></fieldset>
           <button type="submit" disabled={submitting}>{submitting ? "Creating account…" : "Create account"}</button>
         </form>

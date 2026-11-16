@@ -2,8 +2,11 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { ConnectionPanel } from "./connection-panel";
+import { TeacherStudentsPanel } from "./teacher-students-panel";
+import { CompanyAssociationPanel } from "./company-association-panel";
 
 type StudentCompany = { id: string; name: string; type: "studio" | "private_company" | "other" };
+type TeacherCompany = StudentCompany & { isDefault?: boolean };
 type Profile = { firstName: string; lastName: string; organizationName: string; birthYear: number | null; email?: string; roles?: string[]; companies?: StudentCompany[] };
 type CompanyType = "studio" | "private_company" | "other";
 type TeacherOrganization = { id: string; name: string; type: CompanyType };
@@ -16,7 +19,7 @@ async function readProfileResponse(response: Response) {
   catch { throw new Error("The Profile service returned an invalid response. Restart npm run dev, then refresh this page."); }
 }
 
-export function ProfilePage({ required = false, onComplete }: { required?: boolean; onComplete?: () => void }) {
+export function ProfilePage({ required = false, onComplete, teacherCompanies = [], onDefaultStudio }: { required?: boolean; onComplete?: () => void; teacherCompanies?: TeacherCompany[]; onDefaultStudio?: (companyId: string) => void }) {
   const [profile, setProfile] = useState<Profile>(emptyProfile);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -27,6 +30,14 @@ export function ProfilePage({ required = false, onComplete }: { required?: boole
   const estimatedAge = profile.birthYear ? new Date().getFullYear() - profile.birthYear : null;
   const canManageCompany = profile.roles?.includes("teacher") || profile.roles?.includes("admin");
   const isStudent = profile.roles?.includes("student");
+
+  function refreshProfile() {
+    void fetch("/api/profile", { cache: "no-store" }).then(async (response) => {
+      const data = await readProfileResponse(response);
+      if (!response.ok) throw new Error(data.error || "Could not refresh profile.");
+      setProfile(data);
+    }).catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Could not refresh profile."));
+  }
 
   useEffect(() => {
     void fetch("/api/profile").then(async (response) => {
@@ -86,15 +97,18 @@ export function ProfilePage({ required = false, onComplete }: { required?: boole
       <label>Estimated age<input value={estimatedAge === null ? "Enter birth year" : String(estimatedAge)} readOnly aria-readonly="true"/></label>
       <div className="profile-actions"><button className="button button-dark" disabled={saving}>{saving ? "Saving..." : "Save profile"}</button>{message && <p role="status">{message}</p>}</div>
     </form>
-    {canManageCompany && <form className="profile-form company-form" onSubmit={saveCompany}>
+    {false && canManageCompany && <form className="profile-form company-form" onSubmit={saveCompany}>
       <div className="profile-wide"><div className="eyebrow muted">COMPANY</div><h2>{teacherOrganization ? "Your company" : "Associate a company"}</h2><p>Connect your Teacher profile to a studio, private company, or other organization.</p></div>
       <label>Company name<input value={companyName} onChange={(event) => setCompanyName(event.target.value)} placeholder="Studio or private company" maxLength={160} required/></label>
       <label>Company type<select value={companyType} onChange={(event) => setCompanyType(event.target.value as CompanyType)}><option value="studio">Dance studio</option><option value="private_company">Private company</option><option value="other">Other</option></select></label>
       <div className="profile-actions"><button className="button button-dark" disabled={savingCompany || !companyName.trim()}>{savingCompany ? "Saving..." : teacherOrganization ? "Update company" : "Associate company"}</button></div>
-      {profile.companies?.length ? <div className="profile-wide"><strong>Company associations</strong><ul className="profile-company-list">{profile.companies.map((company) => <li key={company.id}>{company.name} <small>{company.type.replace("_", " ")}</small></li>)}</ul></div> : null}
+      {profile.companies?.length ? <div className="profile-wide"><strong>Company associations</strong><ul className="profile-company-list">{profile.companies?.map((company) => <li key={company.id}>{company.name} <small>{company.type.replace("_", " ")}</small></li>)}</ul></div> : null}
     </form>}
+    {canManageCompany && <CompanyAssociationPanel onChanged={refreshProfile} />}
+    {canManageCompany && teacherCompanies.length ? <section className="profile-form company-association-list"><div className="profile-wide"><strong>Company associations</strong><p>Choose one default studio for the next time you sign in.</p><ul className="profile-company-list profile-company-defaults">{teacherCompanies.map((company) => <li key={company.id}><label><input type="checkbox" checked={company.isDefault === true} onChange={() => onDefaultStudio?.(company.id)}/><span>{company.name}</span></label><small>{company.type.replace("_", " ")}</small></li>)}</ul></div></section> : null}
+    {canManageCompany && <TeacherStudentsPanel />}
     {isStudent && <section className="profile-form company-form">
-      <div className="profile-wide"><div className="eyebrow muted">STUDIOS & COMPANIES</div><h2>Your associations</h2><p>{profile.companies?.length ? "You can belong to more than one studio or company." : "Request access to a teacher or company to add an association."}</p>{profile.companies?.length ? <ul className="profile-company-list">{profile.companies.map((company) => <li key={company.id}>{company.name} <small>{company.type.replace("_", " ")}</small></li>)}</ul> : null}</div>
+      <div className="profile-wide"><div className="eyebrow muted">STUDIOS & COMPANIES</div><h2>Your associations</h2><p>{profile.companies?.length ? "You can belong to more than one studio or company." : "Request access to a teacher or company to add an association."}</p>{profile.companies?.length ? <ul className="profile-company-list">{profile.companies?.map((company) => <li key={company.id}>{company.name} <small>{company.type.replace("_", " ")}</small></li>)}</ul> : null}</div>
       <div className="profile-wide"><ConnectionPanel role="student" /></div>
     </section>}
   </section>;

@@ -1,15 +1,24 @@
 import { NextResponse } from "next/server";
 import { getAuthenticatedUser } from "../../lib/auth-session";
+import { usesPostgres } from "../../lib/database-driver";
+import { createPgStudent, listPgStudentsForTeacher, listPgStudentsForUser } from "../../lib/postgres-session-store";
 import { createStudent, getTeacherOrganization, listStudentsForTeacher, listStudentsForUser } from "../../lib/session-store";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
   try {
     const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Sign in to view student profiles." }, { status: 401 });
-    return NextResponse.json(url.searchParams.get("scope") === "teacher" ? listStudentsForTeacher(user.id) : listStudentsForUser(user.id));
+    const companyId = url.searchParams.get("companyId");
+    const asTeacher = url.searchParams.get("scope") === "teacher";
+    const students = usesPostgres()
+      ? await (asTeacher ? listPgStudentsForTeacher(user.id, companyId) : listPgStudentsForUser(user.id))
+      : (asTeacher ? listStudentsForTeacher(user.id, companyId) : listStudentsForUser(user.id));
+    return NextResponse.json(students, { headers: { "Cache-Control": "no-store" } });
   }
   catch (error) {
     console.error("Could not list student profiles:", error);
@@ -25,13 +34,16 @@ export async function POST(request: Request) {
   try {
     const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Sign in to create a student profile." }, { status: 401 });
-    if (organizationId && organizationId !== getTeacherOrganization(user.id)?.id) {
+    if (!usesPostgres() && organizationId && organizationId !== getTeacherOrganization(user.id)?.id) {
       return NextResponse.json({ error: "Choose the company associated with this Teacher profile, or leave the student unassigned." }, { status: 400 });
     }
-    return NextResponse.json(createStudent({ name, teacherUserId: user.id, organizationId }), { status: 201 });
+    const student = usesPostgres()
+      ? await createPgStudent({ name, teacherUserId: user.id, organizationId })
+      : createStudent({ name, teacherUserId: user.id, organizationId });
+    return NextResponse.json(student, { status: 201 });
   }
   catch (error) {
-    if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) {
+    if ((error instanceof Error && error.message.includes("UNIQUE constraint failed")) || (typeof error === "object" && error !== null && "code" in error && error.code === "23505")) {
       return NextResponse.json({ error: "A student with that name already exists." }, { status: 409 });
     }
     if (error instanceof Error && error.message.includes("FOREIGN KEY constraint failed")) {

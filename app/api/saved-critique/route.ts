@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
+import { usesPostgres } from "../../lib/database-driver";
 import { findCritiqueForVideo, fingerprintVideo } from "../../lib/critique-store";
+import { findPgCritiqueForVideo } from "../../lib/postgres-critique-store";
 
 export const runtime = "nodejs";
 
@@ -16,7 +18,7 @@ export async function POST(request: Request) {
   }
   try {
     const hash = await fingerprintVideo(video);
-    const saved = findCritiqueForVideo(hash);
+    const saved = usesPostgres() ? await findPgCritiqueForVideo(hash) : findCritiqueForVideo(hash);
     return NextResponse.json(saved);
   } catch (error) {
     console.error("Could not look up the saved critique:", error);

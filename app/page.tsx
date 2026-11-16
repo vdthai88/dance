@@ -27,6 +27,7 @@ type SavedBaseline = {
   model: string;
   createdAt: string;
 };
+type TeacherCompany = { id: string; name: string; type: "studio" | "private_company" | "other"; isDefault?: boolean };
 
 export default function Home() {
   const [videoUrl, setVideoUrl] = useState("");
@@ -49,6 +50,11 @@ export default function Home() {
   const [profile, setProfile] = useState<"student" | "teacher">("student");
   const [profileRequired, setProfileRequired] = useState(false);
   const [activePage, setActivePage] = useState<"replai" | "coaching" | "profile">("replai");
+  const [hasProfileActions, setHasProfileActions] = useState(false);
+  const [teacherCompanies, setTeacherCompanies] = useState<TeacherCompany[]>([]);
+  const [activeTeacherCompanyId, setActiveTeacherCompanyId] = useState("");
+  const [studentCompanies, setStudentCompanies] = useState<TeacherCompany[]>([]);
+  const [activeStudentCompanyId, setActiveStudentCompanyId] = useState("");
   const [routeReady, setRouteReady] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isLookingUpBaseline, setIsLookingUpBaseline] = useState(false);
@@ -91,6 +97,56 @@ export default function Home() {
   }, [activePage, profileRequired, routeReady]);
 
   useEffect(() => () => { if (videoUrl) URL.revokeObjectURL(videoUrl); }, [videoUrl]);
+
+  useEffect(() => {
+    let active = true;
+    async function checkProfileActions() {
+      try {
+        const [studentRequests, companyRequests] = await Promise.all([fetch("/api/connections?pending=true", { cache: "no-store" }), fetch("/api/company-join-requests", { cache: "no-store" })]);
+        const studentData = studentRequests.ok ? await studentRequests.json() as unknown[] : [];
+        const companyData = companyRequests.ok ? await companyRequests.json() as unknown[] : [];
+        if (active) setHasProfileActions(studentData.length > 0 || companyData.length > 0);
+      } catch { if (active) setHasProfileActions(false); }
+    }
+    void checkProfileActions();
+    const interval = window.setInterval(() => { void checkProfileActions(); }, 20000);
+    return () => { active = false; window.clearInterval(interval); };
+  }, []);
+
+  useEffect(() => {
+    if (activePage !== "coaching") return;
+    let active = true;
+    void fetch("/api/account/roles", { cache: "no-store" })
+      .then(async (response) => {
+        const result = await response.json() as { roles?: string[] };
+        if (!response.ok) throw new Error("Could not load account roles.");
+        if (active) setProfile(result.roles?.includes("teacher") || result.roles?.includes("admin") ? "teacher" : "student");
+      })
+      .catch(() => { if (active) setProfile("student"); });
+    return () => { active = false; };
+  }, [activePage]);
+
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/teacher-companies", { cache: "no-store" }).then(async (response) => {
+      const companies = await response.json() as TeacherCompany[];
+      if (!response.ok || !active) return;
+      setTeacherCompanies(companies);
+      setActiveTeacherCompanyId((current) => current && companies.some((company) => company.id === current) ? current : companies.find((company) => company.isDefault)?.id ?? companies[0]?.id ?? "");
+    }).catch(() => { if (active) setTeacherCompanies([]); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/user-companies", { cache: "no-store" }).then(async (response) => {
+      const companies = await response.json() as TeacherCompany[];
+      if (!response.ok || !active) return;
+      setStudentCompanies(companies);
+      setActiveStudentCompanyId((current) => current && companies.some((company) => company.id === current) ? current : companies[0]?.id ?? "");
+    }).catch(() => { if (active) setStudentCompanies([]); });
+    return () => { active = false; };
+  }, []);
 
   async function openCoaching() {
     try {
@@ -308,6 +364,16 @@ export default function Home() {
     return () => window.clearTimeout(timeout);
   }, [videoFile, comparisonFile, autoAlignMusic]);
 
+  const activeCompanies = profile === "teacher" ? teacherCompanies : studentCompanies;
+  const activeCompanyId = profile === "teacher" ? activeTeacherCompanyId : activeStudentCompanyId;
+  const activeCompany = activeCompanies.find((company) => company.id === activeCompanyId) ?? null;
+
+  function changeActiveCompany(companyId: string) {
+    if (profile === "teacher") setActiveTeacherCompanyId(companyId);
+    else setActiveStudentCompanyId(companyId);
+    setActiveSessionId(null);
+  }
+
   return (
     <main className="shell app-shell">
       <aside className="sidebar" aria-label="Main navigation">
@@ -317,15 +383,16 @@ export default function Home() {
           <button className="sidebar-item" type="button" title="Coaching" onClick={() => { setProfile("teacher"); document.getElementById("coaching")?.scrollIntoView({ behavior: "smooth" }); }}><span>✦</span><b>Coaching</b></button>
           <button className="sidebar-item" type="button" title="Profile"><span>◉</span><b>Profile</b></button>
           <button className="sidebar-item" type="button" title="Team"><span>♧</span><b>Team</b></button>
-          <button className={`sidebar-item ${activePage === "replai" ? "active" : ""}`} type="button" title="ReplAI" onClick={() => { if (profileRequired) { setActivePage("profile"); return; } setActivePage("replai"); setProfile("student"); document.getElementById("studio")?.scrollIntoView({ behavior: "smooth" }); }}><span>R</span><b>ReplAI</b></button>
-          <button className={`sidebar-item ${activePage === "coaching" ? "active" : ""}`} type="button" title="Coaching" onClick={() => { if (profileRequired) { setActivePage("profile"); return; } void openCoaching(); }}><span>C</span><b>Coaching</b></button>
-          <button className={`sidebar-item ${activePage === "profile" ? "active" : ""}`} type="button" title="Profile" onClick={() => { setActivePage("profile"); document.getElementById("profile")?.scrollIntoView({ behavior: "smooth" }); }}><span>P</span><b>Profile</b></button>
+          <button className={`sidebar-item ${activePage === "replai" ? "active" : ""}`} type="button" title="ReplAI" onClick={() => { if (profileRequired) { setActivePage("profile"); return; } setActivePage("replai"); setProfile("student"); document.getElementById("studio")?.scrollIntoView({ behavior: "smooth" }); }}><span aria-hidden="true">▶</span><b>ReplAI</b></button>
+          <button className={`sidebar-item ${activePage === "coaching" ? "active" : ""}`} type="button" title="Coaching" onClick={() => { if (profileRequired) { setActivePage("profile"); return; } void openCoaching(); }}><span aria-hidden="true">✦</span><b>Coaching</b></button>
+          <button className={`sidebar-item ${activePage === "profile" ? "active" : ""}`} type="button" title={hasProfileActions ? "Profile — actions required" : "Profile"} onClick={() => { setActivePage("profile"); document.getElementById("profile")?.scrollIntoView({ behavior: "smooth" }); }}><span className="sidebar-icon" aria-hidden="true">◉{hasProfileActions && <i className="profile-action-star" aria-label="Actions required">★</i>}</span><b>Profile</b></button>
         </nav>
         <button className="sidebar-item sidebar-settings" type="button" title="Settings"><span>⚙</span><b>Settings</b></button>
       </aside>
       <header className="topbar">
         <a className="brand brand-logo" href="#top" aria-label="One Dance home"><img src="/one_dance_logo.png?v=20261111" alt="One Dance" width={76} height={62} /></a>
         <p className="header-slogan">Every move has a <em>next step.</em></p>
+        {activeCompany && (activePage === "coaching" || (profile === "teacher" && activePage === "profile")) && <label className="current-studio">Current studio: {activeCompanies.length > 1 ? <select value={activeCompanyId} onChange={(event) => changeActiveCompany(event.target.value)} aria-label="Current studio">{activeCompanies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select> : <b>{activeCompany.name}</b>}</label>}
         <AccountMenu />
       </header>
 
@@ -379,8 +446,8 @@ export default function Home() {
         {error && <p className="error-message" role="alert">{error}</p>}
       </section>}
 
-      {activePage === "coaching" && <section className="workspace coaching-workspace" id="studio"><div className="coaching-heading"><div className="eyebrow muted">COACHING</div><h1>{profile === "student" ? "Your coaching space." : "Guide every next step."}</h1><p>{profile === "student" ? "Review your sessions, feedback, and next steps." : "Manage student sessions, respond to connection requests, and turn teacher feedback into action."}</p></div><SessionPanel role={profile} onRoleChange={setProfile} videoFile={videoFile} onSessionChange={(session) => setActiveSessionId(session?.id ?? null)} /><div id="coaching"><TeacherFeedbackPanel sessionId={activeSessionId} role={profile} /></div></section>}
-      {activePage === "profile" && <ProfilePage required={profileRequired} onComplete={() => { setProfileRequired(false); }} />}
+        {activePage === "coaching" && <section className="workspace coaching-workspace" id="studio"><div className="coaching-heading"><div className="eyebrow muted">COACHING</div><h1>{profile === "student" ? "Your coaching space." : "Guide every next step."}</h1><p>{profile === "student" ? "The current studio in the header filters the sessions you can review." : "The current studio in the header determines which students and sessions are shown."}</p></div><SessionPanel key={`${profile}-${activeCompanyId || "none"}`} role={profile} companyId={activeCompanyId || null} onRoleChange={setProfile} onSessionChange={(session) => setActiveSessionId(session?.id ?? null)} /><div id="coaching"><TeacherFeedbackPanel sessionId={activeSessionId} role={profile} /></div></section>}
+      {activePage === "profile" && <ProfilePage required={profileRequired} teacherCompanies={teacherCompanies} onDefaultStudio={async (companyId) => { const response = await fetch("/api/teacher-companies", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ companyId }) }); if (response.ok) { setTeacherCompanies((current) => current.map((company) => ({ ...company, isDefault: company.id === companyId }))); setActiveTeacherCompanyId(companyId); } }} onComplete={() => { setProfileRequired(false); }} />}
 
       <footer><a className="brand footer-brand" href="#top"><span className="brand-mark">o.</span><span>one</span></a><span>Practice with curiosity. âœ³</span><span>Clips are sent to Gemini only when you choose its critique action.</span></footer>
     </main>

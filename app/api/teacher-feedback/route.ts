@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { getAuthenticatedUser } from "../../lib/auth-session";
+import { usesPostgres } from "../../lib/database-driver";
 import {
   isTeacherFeedback,
   TEACHER_FEEDBACK_PROMPT,
   teacherFeedbackSchema,
 } from "../../lib/gemini-critique";
 import { canAccessSession, getSessionSnapshot, saveSessionTeacherFeedback } from "../../lib/session-store";
+import { getPgSessionSnapshot, pgCanAccessSession, savePgSessionTeacherFeedback } from "../../lib/postgres-session-store";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -47,8 +49,9 @@ export async function POST(request: Request) {
   try {
     const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Sign in to save teacher feedback." }, { status: 401 });
-    if (!canAccessSession(user.id, sessionId, true)) return NextResponse.json({ error: "You do not have permission to add feedback to this session." }, { status: 403 });
-    const session = getSessionSnapshot(sessionId);
+    const hasAccess = usesPostgres() ? await pgCanAccessSession(user.id, sessionId, true) : canAccessSession(user.id, sessionId, true);
+    if (!hasAccess) return NextResponse.json({ error: "You do not have permission to add feedback to this session." }, { status: 403 });
+    const session = usesPostgres() ? await getPgSessionSnapshot(sessionId) : getSessionSnapshot(sessionId);
     if (!session) return NextResponse.json({ error: "Practice session not found. Select the session again." }, { status: 404 });
     const bytes = Buffer.from(await audio.arrayBuffer());
     const response = await fetch(`${GEMINI_BASE}/interactions`, {
@@ -89,7 +92,9 @@ export async function POST(request: Request) {
     if (!isTeacherFeedback(parsed)) {
       return NextResponse.json({ error: "Gemini's summary did not match the expected action-item format. Please try again." }, { status: 502 });
     }
-    const saved = saveSessionTeacherFeedback({ sessionId, model, feedback: parsed });
+    const saved = usesPostgres()
+      ? await savePgSessionTeacherFeedback({ sessionId, model, feedback: parsed })
+      : saveSessionTeacherFeedback({ sessionId, model, feedback: parsed });
     return NextResponse.json(saved);
   } catch (error) {
     console.error("Teacher feedback could not be summarized:", error);

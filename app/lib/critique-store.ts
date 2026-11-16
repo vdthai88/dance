@@ -86,6 +86,8 @@ export function openDanceDatabase() {
     CREATE TABLE IF NOT EXISTS practice_sessions (
       id TEXT PRIMARY KEY,
       student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      company_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
+      session_name TEXT NOT NULL DEFAULT '',
       session_date TEXT NOT NULL,
       location TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -129,8 +131,17 @@ export function openDanceDatabase() {
       company_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
       user_id TEXT NOT NULL,
       role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'teacher', 'staff')),
+      is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1)),
       joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY(company_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS company_join_requests (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      requester_user_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined')),
+      requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      decided_at TEXT
     );
     CREATE TABLE IF NOT EXISTS student_teacher_assignments (
       student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
@@ -185,6 +196,8 @@ export function openDanceDatabase() {
       ON student_teacher_assignments(teacher_user_id, student_id);
     CREATE INDEX IF NOT EXISTS idx_student_company_assignments_company
       ON student_company_assignments(company_id, student_id);
+    CREATE INDEX IF NOT EXISTS idx_company_join_requests_company
+      ON company_join_requests(company_id, status);
   `);
   db.exec("PRAGMA foreign_keys = ON");
   const studentColumns = db.prepare("PRAGMA table_info(students)").all() as Array<{ name: string }>;
@@ -194,12 +207,29 @@ export function openDanceDatabase() {
   if (!studentColumns.some((column) => column.name === "user_id")) {
     db.exec("ALTER TABLE students ADD COLUMN user_id TEXT");
   }
+  const practiceSessionColumns = db.prepare("PRAGMA table_info(practice_sessions)").all() as Array<{ name: string }>;
+  if (!practiceSessionColumns.some((column) => column.name === "company_id")) {
+    db.exec("ALTER TABLE practice_sessions ADD COLUMN company_id TEXT REFERENCES organizations(id) ON DELETE SET NULL");
+    db.exec("UPDATE practice_sessions SET company_id = (SELECT organization_id FROM students WHERE students.id = practice_sessions.student_id) WHERE company_id IS NULL");
+  }
+  if (!practiceSessionColumns.some((column) => column.name === "session_name")) {
+    db.exec("ALTER TABLE practice_sessions ADD COLUMN session_name TEXT NOT NULL DEFAULT ''");
+    db.exec(`UPDATE practice_sessions
+      SET session_name = session_date || ' - ' || COALESCE((SELECT display_name FROM students WHERE students.id = practice_sessions.student_id), 'Student')
+      WHERE session_name = ''`);
+  }
   const teacherProfileColumns = db.prepare("PRAGMA table_info(teacher_profiles)").all() as Array<{ name: string }>;
   if (!teacherProfileColumns.some((column) => column.name === "is_company_owner")) {
     db.exec("ALTER TABLE teacher_profiles ADD COLUMN is_company_owner INTEGER NOT NULL DEFAULT 0 CHECK (is_company_owner IN (0, 1))");
   }
   if (!teacherProfileColumns.some((column) => column.name === "user_id")) {
     db.exec("ALTER TABLE teacher_profiles ADD COLUMN user_id TEXT");
+  }
+  const companyMembershipColumns = db.prepare("PRAGMA table_info(company_memberships)").all() as Array<{ name: string }>;
+  if (!companyMembershipColumns.some((column) => column.name === "is_default")) {
+    db.exec("ALTER TABLE company_memberships ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1))");
+    db.exec(`UPDATE company_memberships SET is_default = 1
+      WHERE (company_id, user_id) IN (SELECT organization_id, user_id FROM teacher_profiles WHERE organization_id IS NOT NULL)`);
   }
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_teacher_profiles_user ON teacher_profiles(user_id) WHERE user_id IS NOT NULL");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_students_user ON students(user_id) WHERE user_id IS NOT NULL");

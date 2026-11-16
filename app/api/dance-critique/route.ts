@@ -6,8 +6,13 @@ import {
   danceComparisonSchema,
   isDanceCritique,
 } from "../../lib/gemini-critique";
+import { usesPostgres } from "../../lib/database-driver";
+import { getAuthenticatedUser } from "../../lib/auth-session";
 import { findCritique, findCritiqueForVideo, fingerprintVideo, makeCritiqueKey, saveCritique } from "../../lib/critique-store";
+import { attachPgSessionCritique, findPgCritique, findPgCritiqueForVideo, savePgCritique } from "../../lib/postgres-critique-store";
+import { getPgSessionVideoStorageContext, pgCanAccessSession, savePgSessionVideo } from "../../lib/postgres-session-store";
 import { attachSessionCritique, attachSessionVideo } from "../../lib/session-store";
+import { saveLocalVideo } from "../../lib/video-storage";
 
 export const runtime = "nodejs";
 export const maxDuration = 600;
@@ -243,15 +248,33 @@ export async function POST(request: Request) {
     if (newer instanceof File) newerHash = await fingerprintVideo(newer);
     cacheKey = makeCritiqueKey(earlierHash, newerHash);
     if (sessionId) {
-      if (!attachSessionVideo(sessionId, earlierHash, earlier.name)) return jsonError("Practice session not found. Select the session again.", 404);
-      if (newer instanceof File && newerHash && !attachSessionVideo(sessionId, newerHash, newer.name)) return jsonError("Practice session not found. Select the session again.", 404);
+      if (usesPostgres()) {
+        const user = await getAuthenticatedUser(request);
+        if (!user) return jsonError("Sign in before requesting feedback for a practice session.", 401);
+        const hasAccess = await pgCanAccessSession(user.id, sessionId, true) || await pgCanAccessSession(user.id, sessionId, false);
+        if (!hasAccess) return jsonError("You do not have access to this practice session.", 403);
+        const storage = await getPgSessionVideoStorageContext(sessionId);
+        if (!storage) return jsonError("Practice session not found. Select the session again.", 404);
+        const earlierKey = await saveLocalVideo({ companyId: storage.companyId, studentId: storage.studentId, sessionId, hash: earlierHash, filename: earlier.name, bytes: new Uint8Array(await earlier.arrayBuffer()) });
+        if (!await savePgSessionVideo({ sessionId, userId: user.id, videoHash: earlierHash, filename: earlier.name, contentType: earlier.type || null, byteSize: earlier.size, objectKey: earlierKey })) return jsonError("Practice session not found. Select the session again.", 404);
+        if (newer instanceof File && newerHash) {
+          const newerKey = await saveLocalVideo({ companyId: storage.companyId, studentId: storage.studentId, sessionId, hash: newerHash, filename: newer.name, bytes: new Uint8Array(await newer.arrayBuffer()) });
+          if (!await savePgSessionVideo({ sessionId, userId: user.id, videoHash: newerHash, filename: newer.name, contentType: newer.type || null, byteSize: newer.size, objectKey: newerKey })) return jsonError("Practice session not found. Select the session again.", 404);
+        }
+      } else {
+        if (!attachSessionVideo(sessionId, earlierHash, earlier.name)) return jsonError("Practice session not found. Select the session again.", 404);
+        if (newer instanceof File && newerHash && !attachSessionVideo(sessionId, newerHash, newer.name)) return jsonError("Practice session not found. Select the session again.", 404);
+      }
     }
-    const cached = findCritique(cacheKey);
+    const cached = usesPostgres() ? await findPgCritique(cacheKey) : findCritique(cacheKey);
     if (cached) {
-      if (sessionId) attachSessionCritique(sessionId, cached.key);
+      if (sessionId) {
+        if (usesPostgres()) await attachPgSessionCritique(sessionId, cached.key);
+        else attachSessionCritique(sessionId, cached.key);
+      }
       return NextResponse.json(cached.critique, { headers: { "X-Critique-Cache": "hit" } });
     }
-    if (newer instanceof File) savedBaseline = findCritiqueForVideo(earlierHash);
+    if (newer instanceof File) savedBaseline = usesPostgres() ? await findPgCritiqueForVideo(earlierHash) : findCritiqueForVideo(earlierHash);
   } catch (error) {
     console.error("Could not read the local critique database:", error);
     return jsonError("The local critique database could not be read. Check the server terminal and try again.", 500);
@@ -338,7 +361,7 @@ export async function POST(request: Request) {
     if (!isDanceCritique(critique)) return jsonError("Gemini's critique did not match the expected format. Please try again.", 502);
 
     try {
-      saveCritique({
+      const record = {
         key: cacheKey,
         earlierHash,
         newerHash,
@@ -346,8 +369,13 @@ export async function POST(request: Request) {
         newerFilename: newer instanceof File ? newer.name : null,
         model,
         critique,
-      });
-      if (sessionId) attachSessionCritique(sessionId, cacheKey);
+      };
+      if (usesPostgres()) await savePgCritique(record);
+      else saveCritique(record);
+      if (sessionId) {
+        if (usesPostgres()) await attachPgSessionCritique(sessionId, cacheKey);
+        else attachSessionCritique(sessionId, cacheKey);
+      }
     } catch (error) {
       console.error("Could not save the critique to the local database:", error);
       return jsonError("Gemini returned a critique, but the local database could not save it. Check the server terminal.", 500);

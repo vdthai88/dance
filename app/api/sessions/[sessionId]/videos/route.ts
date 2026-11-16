@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { fingerprintVideo } from "../../../../lib/critique-store";
 import { getAuthenticatedUser } from "../../../../lib/auth-session";
+import { usesPostgres } from "../../../../lib/database-driver";
+import { getPgSessionVideoStorageContext, pgCanAccessSession, savePgSessionVideo } from "../../../../lib/postgres-session-store";
 import { attachSessionVideo, canAccessSession } from "../../../../lib/session-store";
+import { deleteLocalVideo, saveLocalVideo } from "../../../../lib/video-storage";
 
 export const runtime = "nodejs";
 
@@ -13,9 +16,26 @@ export async function POST(request: Request, context: { params: Promise<{ sessio
   try {
     const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Sign in to attach a video." }, { status: 401 });
-    if (!canAccessSession(user.id, sessionId, true)) return NextResponse.json({ error: "You do not have permission to update this session." }, { status: 403 });
+    const teacherAccess = usesPostgres() ? await pgCanAccessSession(user.id, sessionId, true) : canAccessSession(user.id, sessionId, true);
+    const studentAccess = usesPostgres() ? await pgCanAccessSession(user.id, sessionId, false) : canAccessSession(user.id, sessionId, false);
+    if (!teacherAccess && !studentAccess) return NextResponse.json({ error: "You do not have permission to update this session." }, { status: 403 });
     const hash = await fingerprintVideo(video);
-    if (!attachSessionVideo(sessionId, hash, video.name)) return NextResponse.json({ error: "Practice session not found." }, { status: 404 });
+    let attached: boolean;
+    if (usesPostgres()) {
+      const context = await getPgSessionVideoStorageContext(sessionId);
+      if (!context) return NextResponse.json({ error: "Practice session not found." }, { status: 404 });
+      const bytes = new Uint8Array(await video.arrayBuffer());
+      const objectKey = await saveLocalVideo({ companyId: context.companyId, studentId: context.studentId, sessionId, hash, filename: video.name, bytes });
+      try {
+        attached = await savePgSessionVideo({ sessionId, userId: user.id, videoHash: hash, filename: video.name, contentType: video.type || null, byteSize: video.size, objectKey });
+      } catch (error) {
+        await deleteLocalVideo(objectKey);
+        throw error;
+      }
+    } else {
+      attached = attachSessionVideo(sessionId, hash, video.name);
+    }
+    if (!attached) return NextResponse.json({ error: "Practice session not found." }, { status: 404 });
     return NextResponse.json({ filename: video.name, hash });
   } catch (error) {
     console.error("Could not attach video to practice session:", error);
