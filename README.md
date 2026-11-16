@@ -14,6 +14,18 @@ The app now uses local email-and-password accounts. On first visit, create an ac
 
 For a new machine, copy `.env.example` to `.env.local`, set a unique `BETTER_AUTH_SECRET`, then restart the development server. The generated local secret must stay private and must never be committed.
 
+## Social sign-in
+
+Email/password remains available. Google, Apple, and Facebook/Meta sign-in are also supported when configured. Add a provider's client ID and secret to `.env.local` (or to your cloud host's secret settings); its button appears only when both values are present. Each provider must allow this callback URL:
+
+```
+https://your-domain.example/api/auth/callback/google
+https://your-domain.example/api/auth/callback/apple
+https://your-domain.example/api/auth/callback/facebook
+```
+
+For local testing, use your temporary HTTPS tunnel URL rather than a LAN IP, because social providers require a publicly reachable HTTPS callback. A new social account created from the sign-in page defaults to Student; the Create Account page lets the person explicitly start as Student or Teacher. Existing accounts are linked only when the provider verifies the same email address. Instagram Login is not included as a normal account-login option: Meta positions it for Instagram professional-account API access rather than general consumer sign-in.
+
 ## Access model
 
 - `user` is the single sign-in identity. A person can hold multiple records in `user_roles` (`student`, `teacher`, or `admin`).

@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { betterAuth } from "better-auth";
 import { getPostgresPool } from "../../db/postgres";
 import { usesPostgres } from "./database-driver";
+import { configuredSocialProviders } from "./social-auth";
 
 const databasePath = process.env.DANCE_DATABASE_PATH || join(process.cwd(), "data", "dance.sqlite");
 const localAllowedHosts = (process.env.BETTER_AUTH_ALLOWED_HOSTS || "localhost:*,127.0.0.1:*,192.168.86.162:*")
@@ -28,5 +29,23 @@ export const auth = betterAuth({
   database: usesPostgres() ? getPostgresPool() : new DatabaseSync(databasePath),
   emailAndPassword: {
     enabled: true,
+  },
+  socialProviders: configuredSocialProviders(),
+  account: {
+    encryptOAuthTokens: true,
+    accountLinking: {
+      enabled: true,
+      trustedProviders: ["google", "apple", "facebook", "email-password"],
+      allowDifferentEmails: false,
+    },
+  },
+  rateLimit: {
+    enabled: true,
+    window: 60,
+    max: 20,
+    customRules: {
+      "/sign-in/email": { window: 60, max: 8 },
+      "/sign-up/email": { window: 60 * 60, max: 8 },
+    },
   },
 });

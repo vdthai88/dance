@@ -41,6 +41,16 @@ export async function getPgUserProfile(userId: string): Promise<UserProfile> {
   return row ? { firstName: row.first_name, lastName: row.last_name, organizationName: row.organization_name, birthYear: row.birth_year } : { firstName: "", lastName: "", organizationName: "", birthYear: null };
 }
 
+/** Google stores a display name in Better Auth's user record. Split it only as
+ * a profile-form suggestion; the person must still review and save it. */
+export async function getPgGoogleNameSuggestion(userId: string, displayName: string): Promise<Pick<UserProfile, "firstName" | "lastName"> | null> {
+  const linked = await getPostgresPool().query(`SELECT 1 FROM account WHERE "userId" = $1 AND "providerId" = 'google' LIMIT 1`, [userId]);
+  if (!linked.rowCount) return null;
+  const parts = displayName.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return null;
+  return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
+}
+
 export async function savePgUserProfile(userId: string, profile: UserProfile): Promise<UserProfile> {
   const pool = getPostgresPool();
   await pool.query(`INSERT INTO user_profiles (user_id, first_name, last_name, organization_name, birth_year, updated_at)

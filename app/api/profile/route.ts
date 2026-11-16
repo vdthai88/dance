@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAuthenticatedUser } from "../../lib/auth-session";
 import { usesPostgres } from "../../lib/database-driver";
-import { getPgAccountRoles, getPgUserProfile, listPgUserCompanies, savePgUserProfile } from "../../lib/postgres-profile-store";
+import { getPgAccountRoles, getPgGoogleNameSuggestion, getPgUserProfile, listPgUserCompanies, savePgUserProfile } from "../../lib/postgres-profile-store";
 import { getAccountRoles, getUserProfile, listUserCompanies, saveUserProfile } from "../../lib/session-store";
 export const runtime = "nodejs";
 export async function GET(request: Request) {
@@ -9,10 +9,15 @@ export async function GET(request: Request) {
     const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Sign in to view your profile." }, { status: 401 });
     if (usesPostgres()) {
-      const [profile, roles, companies] = await Promise.all([
-        getPgUserProfile(user.id), getPgAccountRoles(user.id), listPgUserCompanies(user.id),
+      const [profile, roles, companies, googleSuggestion] = await Promise.all([
+        getPgUserProfile(user.id), getPgAccountRoles(user.id), listPgUserCompanies(user.id), getPgGoogleNameSuggestion(user.id, user.name),
       ]);
-      return NextResponse.json({ ...profile, email: user.email, roles, companies });
+      const suggestedProfile = googleSuggestion ? {
+        ...profile,
+        firstName: profile.firstName || googleSuggestion.firstName,
+        lastName: profile.lastName || googleSuggestion.lastName,
+      } : profile;
+      return NextResponse.json({ ...suggestedProfile, email: user.email, roles, companies });
     }
     return NextResponse.json({ ...getUserProfile(user.id), email: user.email, roles: getAccountRoles(user.id), companies: listUserCompanies(user.id) });
   } catch (error) {
