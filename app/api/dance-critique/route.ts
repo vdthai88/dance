@@ -230,6 +230,8 @@ export async function POST(request: Request) {
 }
 
 async function critiqueVideo(request: Request, form: VideoUpload) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) return jsonError("Sign in before requesting video feedback.", 401);
   const earlier = form.get("video");
   const newer = form.get("comparisonVideo");
   if (!isUploadedVideo(earlier)) return jsonError("Choose the earlier take before requesting a critique.", 400);
@@ -258,8 +260,6 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
     cacheKey = makeCritiqueKey(earlierHash, newerHash);
     if (sessionId) {
       if (usesPostgres()) {
-        const user = await getAuthenticatedUser(request);
-        if (!user) return jsonError("Sign in before requesting feedback for a practice session.", 401);
         const hasAccess = await pgCanAccessSession(user.id, sessionId, true) || await pgCanAccessSession(user.id, sessionId, false);
         if (!hasAccess) return jsonError("You do not have access to this practice session.", 403);
         const storage = await getPgSessionVideoStorageContext(sessionId);
@@ -275,7 +275,7 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
         if (isUploadedVideo(newer) && newerHash && !attachSessionVideo(sessionId, newerHash, newer.name)) return jsonError("Practice session not found. Select the session again.", 404);
       }
     }
-    const cached = usesPostgres() ? await findPgCritique(cacheKey) : findCritique(cacheKey);
+    const cached = usesPostgres() ? await findPgCritique(cacheKey, user.id) : findCritique(cacheKey);
     if (cached) {
       if (sessionId) {
         if (usesPostgres()) await attachPgSessionCritique(sessionId, cached.key);
@@ -283,7 +283,7 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
       }
       return NextResponse.json(cached.critique, { headers: { "X-Critique-Cache": "hit" } });
     }
-    if (isUploadedVideo(newer)) savedBaseline = usesPostgres() ? await findPgCritiqueForVideo(earlierHash) : findCritiqueForVideo(earlierHash);
+    if (isUploadedVideo(newer)) savedBaseline = usesPostgres() ? await findPgCritiqueForVideo(earlierHash, user.id) : findCritiqueForVideo(earlierHash);
   } catch (error) {
     console.error("Could not read the local critique database:", error);
     return jsonError("The local critique database could not be read. Check the server terminal and try again.", 500);
@@ -381,7 +381,7 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
         model,
         critique,
       };
-      if (usesPostgres()) await savePgCritique(record);
+      if (usesPostgres()) await savePgCritique(record, user.id);
       else saveCritique(record);
       if (sessionId) {
         if (usesPostgres()) await attachPgSessionCritique(sessionId, cacheKey);

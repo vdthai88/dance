@@ -467,7 +467,7 @@ export default function Home() {
           </div>
         )}
         {error && <p className="error-message" role="alert">{error}</p>}
-        <VideoLibrary refreshKey={libraryRefreshKey} />
+        <VideoLibrary refreshKey={libraryRefreshKey} busy={isCritiquing || savingVideos > 0} onCritiquesDeleted={() => { setDanceCritique(null); setSavedBaseline(null); setCritiqueCacheHit(false); baselineLookupId.current += 1; setIsLookingUpBaseline(false); }} />
       </section>}
 
         {activePage === "coaching" && <section className="workspace coaching-workspace" id="studio"><div className="coaching-heading"><div className="eyebrow muted">COACHING</div><h1>{profile === "student" ? "Your coaching space." : "Guide every next step."}</h1><p>{profile === "student" ? "The current studio in the header filters the sessions you can review." : "The current studio in the header determines which students and sessions are shown."}</p></div><SessionPanel key={`${profile}-${activeCompanyId || "none"}`} role={profile} companyId={activeCompanyId || null} onRoleChange={setProfile} onSessionChange={(session) => setActiveSessionId(session?.id ?? null)} /><div id="coaching"><TeacherFeedbackPanel sessionId={activeSessionId} role={profile} /></div></section>}

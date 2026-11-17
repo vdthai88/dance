@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { saveLocalVideo, streamLocalVideo, VideoRangeError } from '../app/lib/video-storage.ts';
+import { deleteLocalVideo, saveLocalVideo, streamLocalVideo, VideoRangeError } from '../app/lib/video-storage.ts';
 
 test('stores a file and streams full, partial and suffix playback without buffering', async () => {
   const root = await mkdtemp(join(tmpdir(), 'one-dance-storage-test-'));
@@ -28,6 +28,9 @@ test('stores a file and streams full, partial and suffix playback without buffer
     await assert.rejects(streamLocalVideo(key, 'bytes=4-2'), VideoRangeError);
     await assert.rejects(streamLocalVideo(key, 'bytes=0-1,4-5'), VideoRangeError);
     await assert.rejects(streamLocalVideo('../outside'), /Invalid local video object key/);
+    await deleteLocalVideo(key);
+    await assert.rejects(streamLocalVideo(key), { code: 'ENOENT' });
+    await deleteLocalVideo(key); // A retry after a missing object is harmless.
   } finally {
     if (originalDriver === undefined) delete process.env.VIDEO_STORAGE_DRIVER; else process.env.VIDEO_STORAGE_DRIVER = originalDriver;
     if (originalRoot === undefined) delete process.env.LOCAL_UPLOAD_DIR; else process.env.LOCAL_UPLOAD_DIR = originalRoot;

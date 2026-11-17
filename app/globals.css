@@ -70,4 +70,18 @@
 .video-library-row button{flex-shrink:0}
 .video-library-player{display:block;width:100%;max-height:65vh;object-fit:contain;background:#161519;margin-top:15px}
 .video-library-error{color:#a34436;font-size:12px}
+.video-library-message{color:#526a47;font-size:12px}
+.video-library-actions{display:flex;align-items:center;gap:9px;flex-shrink:0}
+.video-delete-button{display:grid;place-items:center;width:36px;height:36px;padding:0;border:1px solid var(--line);border-radius:4px;background:#fff;color:#a34436;cursor:pointer}
+.video-delete-button:hover:not(:disabled){background:#fff0ec;border-color:#d7aaa1}
+.video-delete-button:disabled{opacity:.4;cursor:not-allowed}
+.video-delete-button[aria-busy=true]{opacity:1;cursor:wait}
+.video-delete-dialog{width:min(560px,calc(100% - 30px));padding:24px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);box-shadow:0 16px 60px #21163333}
+.video-delete-dialog::backdrop{background:#21163366}
+.video-delete-dialog h2{margin:0 0 12px;font:500 28px var(--serif)}
+.video-delete-dialog p{font-size:13px;line-height:1.6}
+.video-delete-filename{font-weight:600;overflow-wrap:anywhere}
+.video-delete-options{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:10px;margin-top:22px}
+.video-delete-all{background:#a34436;color:white}
+.video-delete-all:hover{background:#8b3228}
 @media(max-width:700px){.video-library{padding:15px}.video-library-heading{align-items:flex-start;flex-direction:column}.video-library-row{gap:10px}.video-library-heading h2{font-size:24px}}

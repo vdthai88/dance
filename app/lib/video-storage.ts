@@ -162,7 +162,9 @@ export async function deleteLocalVideo(objectKey: string | null) {
   if (!objectKey) return;
   if (configuredDriver() === "r2") {
     const { bucket, client } = r2Client();
-    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: objectKey }));
+    try {
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: objectKey }));
+    } finally { client.destroy(); }
     return;
   }
   await rm(localPath(objectKey), { force: true });

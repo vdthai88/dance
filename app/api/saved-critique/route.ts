@@ -4,6 +4,7 @@ import { findCritiqueForVideo } from "../../lib/critique-store";
 import { findPgCritiqueForVideo } from "../../lib/postgres-critique-store";
 import { isUploadedVideo, readVideoUpload, VideoUploadError } from "../../lib/video-upload";
 import type { VideoUpload } from "../../lib/video-upload";
+import { getAuthenticatedUser } from "../../lib/auth-session";
 
 export const runtime = "nodejs";
 
@@ -15,10 +16,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error instanceof VideoUploadError ? error.message : "The upload could not be read." }, { status: error instanceof VideoUploadError ? error.status : 500 });
   }
   try {
+    const user = await getAuthenticatedUser(request);
+    if (!user) return NextResponse.json({ error: "Sign in to view saved critiques." }, { status: 401 });
     const video = form.get("video");
     if (!isUploadedVideo(video)) return NextResponse.json({ error: "Choose a video to look up its saved critique." }, { status: 400 });
     const hash = video.sha256;
-    const saved = usesPostgres() ? await findPgCritiqueForVideo(hash) : findCritiqueForVideo(hash);
+    const saved = usesPostgres() ? await findPgCritiqueForVideo(hash, user.id) : findCritiqueForVideo(hash);
     return NextResponse.json(saved);
   } catch (error) {
     console.error("Could not look up the saved critique:", error);

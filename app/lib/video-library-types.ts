@@ -6,4 +6,5 @@ export type LibraryVideo = {
   createdAt: string;
   sessionName: string | null;
   available: boolean;
+  canDelete: boolean;
 };
