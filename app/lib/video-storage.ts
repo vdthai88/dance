@@ -1,6 +1,8 @@
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { createReadStream } from "node:fs";
+import { copyFile, mkdir, rename, rm, stat } from "node:fs/promises";
+import { basename, isAbsolute, relative, resolve } from "node:path";
+import { Readable } from "node:stream";
 
 export type LocalVideoWrite = {
   companyId: string | null;
@@ -8,7 +10,8 @@ export type LocalVideoWrite = {
   sessionId: string;
   hash: string;
   filename: string;
-  bytes: Uint8Array;
+  filePath: string;
+  byteSize: number;
 };
 
 function storageRoot() {
@@ -46,6 +49,7 @@ function r2Client() {
     bucket: config.bucket,
     client: new S3Client({
       region: "auto",
+      requestChecksumCalculation: "WHEN_REQUIRED",
       endpoint: config.endpoint,
       credentials: { accessKeyId: config.accessKeyId, secretAccessKey: config.secretAccessKey },
     }),
@@ -64,7 +68,8 @@ export function localVideoObjectKey(input: LocalVideoWrite) {
 function localPath(objectKey: string) {
   const root = storageRoot();
   const target = resolve(/* turbopackIgnore: true */ root, ...objectKey.split("/"));
-  if (!target.startsWith(`${root}\\`) && target !== root) throw new Error("Invalid local video object key.");
+  const child = relative(root, target);
+  if (child.startsWith("..") || isAbsolute(child)) throw new Error("Invalid local video object key.");
   return target;
 }
 
@@ -72,31 +77,85 @@ export async function saveLocalVideo(input: LocalVideoWrite) {
   const objectKey = localVideoObjectKey(input);
   if (configuredDriver() === "r2") {
     const { bucket, client } = r2Client();
-    await client.send(new PutObjectCommand({
-      Bucket: bucket,
-      Key: objectKey,
-      Body: input.bytes,
-      ContentType: mimeTypeForFilename(input.filename),
-      Metadata: { "original-filename": safeMetadata(input.filename), sha256: input.hash },
-    }));
+    const body = createReadStream(input.filePath);
+    try {
+      await client.send(new PutObjectCommand({
+        Bucket: bucket,
+        Key: objectKey,
+        Body: body,
+        ContentLength: input.byteSize,
+        ContentType: mimeTypeForFilename(input.filename),
+        Metadata: { "original-filename": safeMetadata(input.filename), sha256: input.hash },
+      }));
+    } finally {
+      body.destroy();
+      client.destroy();
+    }
     return objectKey;
   }
   const destination = localPath(objectKey);
   await mkdir(resolve(destination, ".."), { recursive: true });
   const temporary = `${destination}.${process.pid}.${Date.now()}.uploading`;
-  await writeFile(temporary, input.bytes);
-  await rename(temporary, destination);
+  try {
+    await copyFile(input.filePath, temporary);
+    await rename(temporary, destination);
+  } finally {
+    await rm(temporary, { force: true });
+  }
   return objectKey;
 }
 
-export async function readLocalVideo(objectKey: string) {
-  if (configuredDriver() === "r2") {
-    const { bucket, client } = r2Client();
-    const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: objectKey }));
-    if (!result.Body) throw new Error("R2 returned an empty video object.");
-    return new Uint8Array(await result.Body.transformToByteArray());
+export class VideoRangeError extends Error {
+  size: number;
+  constructor(size: number) { super("Invalid video byte range."); this.size = size; }
+}
+
+function videoRange(header: string | null, size: number) {
+  if (!header) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header);
+  if (!match || (!match[1] && !match[2])) throw new VideoRangeError(size);
+  const start = match[1] ? Number(match[1]) : Math.max(0, size - Number(match[2]));
+  const end = match[1] && match[2] ? Math.min(size - 1, Number(match[2])) : size - 1;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= size || end < start) throw new VideoRangeError(size);
+  return { start, end };
+}
+
+/** Return a cancellable stream for playback instead of allocating the complete video. */
+export async function streamLocalVideo(objectKey: string, rangeHeader: string | null = null) {
+  const remote = configuredDriver() === "r2" ? r2Client() : null;
+  try {
+    const size = remote
+      ? (await remote.client.send(new HeadObjectCommand({ Bucket: remote.bucket, Key: objectKey }))).ContentLength
+      : (await stat(localPath(objectKey))).size;
+    if (size === undefined || size === 0) throw new Error("The stored video is empty.");
+    const range = videoRange(rangeHeader, size);
+    let body: Readable;
+    if (remote) {
+      const result = await remote.client.send(new GetObjectCommand({
+        Bucket: remote.bucket, Key: objectKey,
+        ...(range ? { Range: `bytes=${range.start}-${range.end}` } : {}),
+      }));
+      if (!(result.Body instanceof Readable)) throw new Error("R2 returned no video stream.");
+      body = result.Body;
+      body.once("close", () => remote.client.destroy());
+    } else {
+      body = createReadStream(localPath(objectKey), range ?? {});
+    }
+    return {
+      body: Readable.toWeb(body, {
+        strategy: { highWaterMark: 64 * 1024, size: (chunk: Uint8Array) => chunk.byteLength },
+      }) as ReadableStream<Uint8Array>,
+      status: range ? 206 : 200,
+      headers: {
+        "Accept-Ranges": "bytes",
+        "Content-Length": String(range ? range.end - range.start + 1 : size),
+        ...(range ? { "Content-Range": `bytes ${range.start}-${range.end}/${size}` } : {}),
+      },
+    };
+  } catch (error) {
+    remote?.client.destroy();
+    throw error;
   }
-  return readFile(localPath(objectKey));
 }
 
 export async function deleteLocalVideo(objectKey: string | null) {

@@ -1,0 +1,42 @@
+import { NextResponse } from "next/server";
+import { getAuthenticatedUser } from "../../lib/auth-session";
+import { usesPostgres } from "../../lib/database-driver";
+import { listLibraryVideos, savePersonalVideo } from "../../lib/video-library-store";
+import { isUploadedVideo, readVideoUpload, VideoUploadError } from "../../lib/video-upload";
+import type { VideoUpload } from "../../lib/video-upload";
+import { saveLocalVideo } from "../../lib/video-storage";
+
+export const runtime = "nodejs";
+
+export async function GET(request: Request) {
+  try {
+    const user = await getAuthenticatedUser(request);
+    if (!user) return NextResponse.json({ error: "Sign in to view your videos." }, { status: 401 });
+    if (!usesPostgres()) return NextResponse.json([], { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json(await listLibraryVideos(user.id), { headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    console.error("Could not list ReplAI uploads:", error);
+    return NextResponse.json({ error: "Your uploaded videos could not be loaded. Try refreshing the list." }, { status: 500 });
+  }
+}
+
+export async function POST(request: Request) {
+  let form: VideoUpload | undefined;
+  try {
+    const user = await getAuthenticatedUser(request);
+    if (!user) return NextResponse.json({ error: "Sign in to save a video." }, { status: 401 });
+    if (!usesPostgres()) return NextResponse.json({ error: "Saving to your video library is unavailable in this environment." }, { status: 503 });
+    form = await readVideoUpload(request, ["video"]);
+    const video = form.get("video");
+    if (!isUploadedVideo(video) || !video.size || !video.type.startsWith("video/")) return NextResponse.json({ error: "Choose a nonempty video file." }, { status: 400 });
+    const objectKey = await saveLocalVideo({ companyId: null, studentId: user.id, sessionId: "replai", hash: video.sha256, filename: video.name, filePath: video.path, byteSize: video.size });
+    const saved = await savePersonalVideo({ userId: user.id, filename: video.name, contentType: video.type, byteSize: video.size, hash: video.sha256, objectKey });
+    return NextResponse.json(saved, { status: 201 });
+  } catch (error) {
+    if (error instanceof VideoUploadError) return NextResponse.json({ error: error.message }, { status: error.status });
+    console.error("Could not save ReplAI video:", error);
+    return NextResponse.json({ error: "Your video could not be saved. Please retry." }, { status: 500 });
+  } finally {
+    await form?.cleanup();
+  }
+}

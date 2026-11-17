@@ -84,6 +84,14 @@ R2_ENDPOINT=https://your_cloudflare_account_id.r2.cloudflarestorage.com
 
 The bucket remains private. The app checks session access before it retrieves a stored video, so do not configure a public bucket for practice videos. Keep `VIDEO_STORAGE_DRIVER=local` on your computer; no R2 account or credentials are needed to develop locally.
 
+### Video processing on small instances
+
+ReplAI lists the signed-in user's latest 100 saved personal uploads and videos attached to their own student sessions. Choosing an earlier or newer take saves a private library copy automatically, independently of requesting Gemini feedback. The list refreshes after uploads and offers streamed playback. Previously previewed ReplAI clips were not stored and must be uploaded again. Apply migration `0004_personal_replai_videos.sql` with `npm run db:migrate` before using this feature; PostgreSQL stores the metadata and the configured local/R2 driver stores the video bytes.
+
+Video upload routes stream multipart requests into temporary files in the operating system's temporary directory. SHA-256 fingerprints are calculated as bytes arrive. The app then streams those files to Gemini and, for session videos, to the configured storage driver. It removes temporary files after each request, including handled failures. Saved-video playback also streams data and supports byte-range requests for seeking.
+
+The limit remains 250 MB total per upload request. Temporary disk must have enough space for active uploads; it is working space, not permanent storage. On Render, keep `VIDEO_STORAGE_DRIVER=r2` for saved videos. This bounds video-buffer memory usage but does not guarantee every workload will fit a 512 MB instance. Direct browser-to-object-storage uploads and background processing remain options for higher concurrency.
+
 ## Limits of these estimates
 
 The measurements are simple computer-vision proxies, not validated dance grades or instructor feedback. The pose model can miss joints when the dancer is occluded, out of frame or poorly lit. Beat detection uses an approximate audio-energy method, and the pose samples are too sparse for precise choreography timing. Treat the notes as prompts to review, not definitive corrections.

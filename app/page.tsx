@@ -10,6 +10,7 @@ import { AccountMenu } from "./components/account-menu";
 import { TeacherFeedbackPanel } from "./components/teacher-feedback-panel";
 import { SessionPanel } from "./components/session-panel";
 import { ProfilePage } from "./components/profile-page";
+import { VideoLibrary } from "./components/video-library";
 
 function formatTime(seconds: number) {
   const safe = Math.max(0, Math.floor(seconds));
@@ -66,6 +67,9 @@ export default function Home() {
   const [sideBySide, setSideBySide] = useState(false);
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
+  const [libraryRefreshKey, setLibraryRefreshKey] = useState(0);
+  const [savingVideos, setSavingVideos] = useState(0);
+  const [videoSaveError, setVideoSaveError] = useState("");
   const primaryVideo = useRef<HTMLVideoElement>(null);
   const secondaryVideo = useRef<HTMLVideoElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -180,6 +184,20 @@ export default function Home() {
     }
   }
 
+  async function saveVideoToLibrary(file: File) {
+    setSavingVideos((current) => current + 1);
+    setVideoSaveError("");
+    try {
+      const form = new FormData();
+      form.set("video", file, file.name);
+      const response = await fetch("/api/replai-videos", { method: "POST", body: form });
+      await readApiJson(response, "Save video");
+      setLibraryRefreshKey((current) => current + 1);
+    } catch (caught) {
+      setVideoSaveError(`“${file.name}” was not saved: ${caught instanceof Error ? caught.message : "Please choose the file again to retry."}`);
+    } finally { setSavingVideos((current) => current - 1); }
+  }
+
   function chooseFile(file?: File) {
     if (!file) return;
     setError("");
@@ -191,6 +209,7 @@ export default function Home() {
     if (file.size > 250 * 1024 * 1024) { setError("This preview supports videos up to 250 MB."); return; }
     setVideoUrl((previous) => { if (previous) URL.revokeObjectURL(previous); return URL.createObjectURL(file); });
     setVideoFile(file);
+    void saveVideoToLibrary(file);
     void loadSavedBaseline(file);
     setFileName(file.name);
     setDuration(0);
@@ -208,6 +227,7 @@ export default function Home() {
     if (file.size > 250 * 1024 * 1024) { setError("This preview supports videos up to 250 MB per clip."); return; }
     setComparisonUrl((previous) => { if (previous) URL.revokeObjectURL(previous); return URL.createObjectURL(file); });
     setComparisonFile(file); setComparisonName(file.name); setSideBySide(true); setNewerSongStart(0); setAlignmentReady(true); setAudioSource("earlier");
+    void saveVideoToLibrary(file);
   }
 
   useEffect(() => () => { if (comparisonUrl) URL.revokeObjectURL(comparisonUrl); }, [comparisonUrl]);
@@ -218,6 +238,7 @@ export default function Home() {
 
   async function requestGeminiCritique() {
     if (!videoFile) return;
+    if (savingVideos > 0) { setError("Please wait for your videos to finish saving, then send them to Gemini."); return; }
     setIsCritiquing(true);
     setError("");
     setDanceCritique(null);
@@ -225,7 +246,6 @@ export default function Home() {
     try {
       const form = new FormData();
       form.set("video", videoFile, videoFile.name);
-      if (activeSessionId) form.set("sessionId", activeSessionId);
       if (comparisonFile) form.set("comparisonVideo", comparisonFile, comparisonFile.name);
       if (comparisonFile) {
         form.set("earlierSongStart", String(earlierSongStart));
@@ -408,10 +428,12 @@ export default function Home() {
       </section>}
 
       {activePage === "replai" && <section className="workspace" id="studio">
-        <div className="section-heading"><div><div className="eyebrow muted">THE STUDIO <span className="step-line"/> STEP 01</div><h2>Practice sessions</h2><p>Choose a student and session, then add coaching or videos.</p></div><div className="privacy"><span>{"\u2667"}</span> Videos stay local unless you request Gemini feedback</div></div>
+        <div className="section-heading"><div><div className="eyebrow muted">THE STUDIO <span className="step-line"/> STEP 01</div><h2>Practice sessions</h2><p>Choose a student and session, then add coaching or videos.</p></div><div className="privacy"><span>{"\u2667"}</span> Your saved videos are private</div></div>
 
         <section className="replai-intro"><div className="eyebrow muted">A PRACTICE, NOT A PERFORMANCE</div><h1>Small steps add up.</h1><div className="replai-steps"><article><span>01</span><h2>Choose your take</h2><p>Upload a solo practice video from your device.</p></article><article><span>02</span><h2>Notice the details</h2><p>Explore a sample report with moments and movement cues.</p></article><article><span>03</span><h2>Try it your way</h2><p>Keep what resonates. Your practice belongs to you.</p></article></div></section>
 
+        <p className="video-save-status" role="status">{savingVideos > 0 ? `Saving ${savingVideos === 1 ? "your video" : "your videos"} to your library...` : "Videos you choose are saved privately to your library. Gemini receives them only when you request feedback."}</p>
+        {videoSaveError && <p className="error-message" role="alert">{videoSaveError}</p>}
         {!videoUrl ? (
           <div className={`upload-card ${dragging ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={onDrop}>
             <input ref={fileInput} className="visually-hidden" type="file" accept="video/*" onChange={onFileChange} aria-label="Choose a dance video" />
@@ -432,7 +454,7 @@ export default function Home() {
               </div>
               <div className="video-footer"><span>{formatTime(currentTime)} <span className="time-divider">/</span> {formatTime(duration)}</span><span className="local-badge">{"\u25c9"} LOCAL PREVIEW</span></div>
               <div className="video-actions">{!comparisonFile && <button className={`toggle-button ${sideBySide ? "selected" : ""}`} onClick={() => setSideBySide((value) => !value)}><span className="toggle-icon">Compare</span>{sideBySide ? "Hide duplicate preview" : "Side-by-side preview"}</button>}</div>
-              {!danceCritique && <div className="analysis-cta gemini-cta"><div><strong>{isCritiquing ? "Gemini is reviewing the clip" : comparisonFile ? "Compare progress with Gemini" : "Ask Gemini for instructor-style feedback"}</strong><span>{isCritiquing ? "Uploading and analyzing your video..." : comparisonFile ? "Gemini receives both clips and compares observable changes. Temporary Gemini uploads are deleted after the request." : "Sending shares the clip with Google Gemini. This app removes its uploaded copy after the request; Google's API data terms apply."}</span></div><button className="button button-dark" disabled={isCritiquing || isAutoAligning || isLookingUpBaseline} onClick={requestGeminiCritique}>{isCritiquing ? <><span className="spinner"/> Working...</> : <>{comparisonFile ? "Compare takes" : "Send to Gemini"} <span>{"\u2197"}</span></>}</button></div>}
+              {!danceCritique && <div className="analysis-cta gemini-cta"><div><strong>{isCritiquing ? "Gemini is reviewing the clip" : comparisonFile ? "Compare progress with Gemini" : "Ask Gemini for instructor-style feedback"}</strong><span>{isCritiquing ? "Uploading and analyzing your video..." : comparisonFile ? "Gemini receives both clips and compares observable changes. Temporary Gemini uploads are deleted after the request." : "Sending shares the clip with Google Gemini. Temporary Gemini uploads are deleted after the request; your saved video stays in your library."}</span></div><button className="button button-dark" disabled={isCritiquing || savingVideos > 0 || isAutoAligning || isLookingUpBaseline} onClick={requestGeminiCritique}>{isCritiquing ? <><span className="spinner"/> Working...</> : <>{comparisonFile ? "Compare takes" : "Send to Gemini"} <span>{"\u2197"}</span></>}</button></div>}
             </div>
             <div className="insights-column">
               {isLookingUpBaseline && <p className="critique-cache-notice">Looking for a saved critique for this video…</p>}
@@ -445,6 +467,7 @@ export default function Home() {
           </div>
         )}
         {error && <p className="error-message" role="alert">{error}</p>}
+        <VideoLibrary refreshKey={libraryRefreshKey} />
       </section>}
 
         {activePage === "coaching" && <section className="workspace coaching-workspace" id="studio"><div className="coaching-heading"><div className="eyebrow muted">COACHING</div><h1>{profile === "student" ? "Your coaching space." : "Guide every next step."}</h1><p>{profile === "student" ? "The current studio in the header filters the sessions you can review." : "The current studio in the header determines which students and sessions are shown."}</p></div><SessionPanel key={`${profile}-${activeCompanyId || "none"}`} role={profile} companyId={activeCompanyId || null} onRoleChange={setProfile} onSessionChange={(session) => setActiveSessionId(session?.id ?? null)} /><div id="coaching"><TeacherFeedbackPanel sessionId={activeSessionId} role={profile} /></div></section>}

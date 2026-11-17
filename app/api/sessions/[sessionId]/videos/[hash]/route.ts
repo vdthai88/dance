@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getAuthenticatedUser } from "../../../../../lib/auth-session";
 import { usesPostgres } from "../../../../../lib/database-driver";
 import { findPgSessionVideo, pgCanAccessSession } from "../../../../../lib/postgres-session-store";
-import { readLocalVideo } from "../../../../../lib/video-storage";
+import { streamLocalVideo, VideoRangeError } from "../../../../../lib/video-storage";
 
 export const runtime = "nodejs";
 
@@ -16,14 +16,15 @@ export async function GET(request: Request, context: { params: Promise<{ session
   const video = await findPgSessionVideo(sessionId, hash);
   if (!video || video.storageStatus !== "ready" || !video.objectKey) return NextResponse.json({ error: "This video is not available in storage. Upload it again to play it." }, { status: 404 });
   try {
-    const bytes = await readLocalVideo(video.objectKey);
-    return new NextResponse(bytes, { headers: {
+    const stored = await streamLocalVideo(video.objectKey, request.headers.get("range"));
+    return new NextResponse(stored.body, { status: stored.status, headers: {
+      ...stored.headers,
       "Content-Type": video.contentType || "video/mp4",
-      "Content-Length": String(bytes.byteLength),
       "Content-Disposition": `inline; filename="${video.filename.replace(/[\\\"]/g, "_")}"`,
       "Cache-Control": "private, no-store",
     } });
-  } catch {
+  } catch (error) {
+    if (error instanceof VideoRangeError) return new NextResponse(null, { status: 416, headers: { "Content-Range": `bytes */${error.size}` } });
     return NextResponse.json({ error: "The stored video file is missing. Upload it again to restore playback." }, { status: 404 });
   }
 }

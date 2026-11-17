@@ -8,16 +8,17 @@ import {
 } from "../../lib/gemini-critique";
 import { usesPostgres } from "../../lib/database-driver";
 import { getAuthenticatedUser } from "../../lib/auth-session";
-import { findCritique, findCritiqueForVideo, fingerprintVideo, makeCritiqueKey, saveCritique } from "../../lib/critique-store";
+import { findCritique, findCritiqueForVideo, makeCritiqueKey, saveCritique } from "../../lib/critique-store";
 import { attachPgSessionCritique, findPgCritique, findPgCritiqueForVideo, savePgCritique } from "../../lib/postgres-critique-store";
 import { getPgSessionVideoStorageContext, pgCanAccessSession, savePgSessionVideo } from "../../lib/postgres-session-store";
 import { attachSessionCritique, attachSessionVideo } from "../../lib/session-store";
 import { saveLocalVideo } from "../../lib/video-storage";
+import { isUploadedVideo, MAX_VIDEO_BYTES, readVideoUpload, VideoUploadError } from "../../lib/video-upload";
+import type { UploadedVideo, VideoUpload } from "../../lib/video-upload";
 
 export const runtime = "nodejs";
 export const maxDuration = 600;
 
-const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
 const MIME_TYPES = new Set(["video/mp4", "video/quicktime", "video/webm", "video/mpeg", "video/x-msvideo"]);
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const UPLOAD_BASE = "https://generativelanguage.googleapis.com/upload/v1beta";
@@ -28,7 +29,7 @@ class GeminiRequestError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
 
-async function uploadAndPrepare(video: File, index: number, apiKey: string, trackUpload: (file: GeminiFile) => void): Promise<GeminiFile> {
+async function uploadAndPrepare(video: UploadedVideo, index: number, apiKey: string, trackUpload: (file: GeminiFile) => void): Promise<GeminiFile> {
   const startUpload = await fetch(`${UPLOAD_BASE}/files`, {
     method: "POST",
     headers: {
@@ -51,9 +52,10 @@ async function uploadAndPrepare(video: File, index: number, apiKey: string, trac
 
   const uploadResponse = await fetch(uploadUrl, {
     method: "POST",
-    headers: { "X-Goog-Upload-Offset": "0", "X-Goog-Upload-Command": "upload, finalize", "Content-Type": video.type },
-    body: await video.arrayBuffer(),
-  });
+    headers: { "X-Goog-Upload-Offset": "0", "X-Goog-Upload-Command": "upload, finalize", "Content-Type": video.type, "Content-Length": String(video.size) },
+    body: video.stream(),
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
   if (!uploadResponse.ok) {
     const failure = await responseError(uploadResponse);
     throw new GeminiRequestError(failure.message, failure.status);
@@ -214,18 +216,25 @@ async function responseError(response: Response) {
 }
 
 export async function POST(request: Request) {
-  let form: FormData;
+  let form: VideoUpload;
   try {
-    form = await request.formData();
-  } catch {
-    return jsonError("The request must contain a video upload.", 400);
+    form = await readVideoUpload(request);
+  } catch (error) {
+    return jsonError(error instanceof VideoUploadError ? error.message : "The video upload could not be read.", error instanceof VideoUploadError ? error.status : 500);
   }
+  try {
+    return await critiqueVideo(request, form);
+  } finally {
+    await form.cleanup();
+  }
+}
 
+async function critiqueVideo(request: Request, form: VideoUpload) {
   const earlier = form.get("video");
   const newer = form.get("comparisonVideo");
-  if (!(earlier instanceof File)) return jsonError("Choose the earlier take before requesting a critique.", 400);
-  if (newer !== null && !(newer instanceof File)) return jsonError("Choose a valid video for the newer take.", 400);
-  const videos = newer instanceof File ? [earlier, newer] : [earlier];
+  if (!isUploadedVideo(earlier)) return jsonError("Choose the earlier take before requesting a critique.", 400);
+  if (newer !== null && !isUploadedVideo(newer)) return jsonError("Choose a valid video for the newer take.", 400);
+  const videos = isUploadedVideo(newer) ? [earlier, newer] : [earlier];
   if (videos.some((video) => !MIME_TYPES.has(video.type))) return jsonError("Use MP4, MOV, WebM, MPEG, or AVI videos.", 415);
   if (videos.some((video) => video.size === 0)) return jsonError("A selected video is empty.", 400);
   if (videos.some((video) => video.size > MAX_VIDEO_BYTES) || videos.reduce((sum, video) => sum + video.size, 0) > MAX_VIDEO_BYTES) {
@@ -244,8 +253,8 @@ export async function POST(request: Request) {
   const earlierSongStart = Number.isFinite(earlierSongStartValue) && earlierSongStartValue >= 0 ? earlierSongStartValue : 0;
   const newerSongStart = Number.isFinite(newerSongStartValue) && newerSongStartValue >= 0 ? newerSongStartValue : 0;
   try {
-    earlierHash = await fingerprintVideo(earlier);
-    if (newer instanceof File) newerHash = await fingerprintVideo(newer);
+    earlierHash = earlier.sha256;
+    if (isUploadedVideo(newer)) newerHash = newer.sha256;
     cacheKey = makeCritiqueKey(earlierHash, newerHash);
     if (sessionId) {
       if (usesPostgres()) {
@@ -255,15 +264,15 @@ export async function POST(request: Request) {
         if (!hasAccess) return jsonError("You do not have access to this practice session.", 403);
         const storage = await getPgSessionVideoStorageContext(sessionId);
         if (!storage) return jsonError("Practice session not found. Select the session again.", 404);
-        const earlierKey = await saveLocalVideo({ companyId: storage.companyId, studentId: storage.studentId, sessionId, hash: earlierHash, filename: earlier.name, bytes: new Uint8Array(await earlier.arrayBuffer()) });
+        const earlierKey = await saveLocalVideo({ companyId: storage.companyId, studentId: storage.studentId, sessionId, hash: earlierHash, filename: earlier.name, filePath: earlier.path, byteSize: earlier.size });
         if (!await savePgSessionVideo({ sessionId, userId: user.id, videoHash: earlierHash, filename: earlier.name, contentType: earlier.type || null, byteSize: earlier.size, objectKey: earlierKey })) return jsonError("Practice session not found. Select the session again.", 404);
-        if (newer instanceof File && newerHash) {
-          const newerKey = await saveLocalVideo({ companyId: storage.companyId, studentId: storage.studentId, sessionId, hash: newerHash, filename: newer.name, bytes: new Uint8Array(await newer.arrayBuffer()) });
+        if (isUploadedVideo(newer) && newerHash) {
+          const newerKey = await saveLocalVideo({ companyId: storage.companyId, studentId: storage.studentId, sessionId, hash: newerHash, filename: newer.name, filePath: newer.path, byteSize: newer.size });
           if (!await savePgSessionVideo({ sessionId, userId: user.id, videoHash: newerHash, filename: newer.name, contentType: newer.type || null, byteSize: newer.size, objectKey: newerKey })) return jsonError("Practice session not found. Select the session again.", 404);
         }
       } else {
         if (!attachSessionVideo(sessionId, earlierHash, earlier.name)) return jsonError("Practice session not found. Select the session again.", 404);
-        if (newer instanceof File && newerHash && !attachSessionVideo(sessionId, newerHash, newer.name)) return jsonError("Practice session not found. Select the session again.", 404);
+        if (isUploadedVideo(newer) && newerHash && !attachSessionVideo(sessionId, newerHash, newer.name)) return jsonError("Practice session not found. Select the session again.", 404);
       }
     }
     const cached = usesPostgres() ? await findPgCritique(cacheKey) : findCritique(cacheKey);
@@ -274,7 +283,7 @@ export async function POST(request: Request) {
       }
       return NextResponse.json(cached.critique, { headers: { "X-Critique-Cache": "hit" } });
     }
-    if (newer instanceof File) savedBaseline = usesPostgres() ? await findPgCritiqueForVideo(earlierHash) : findCritiqueForVideo(earlierHash);
+    if (isUploadedVideo(newer)) savedBaseline = usesPostgres() ? await findPgCritiqueForVideo(earlierHash) : findCritiqueForVideo(earlierHash);
   } catch (error) {
     console.error("Could not read the local critique database:", error);
     return jsonError("The local critique database could not be read. Check the server terminal and try again.", 500);
@@ -290,17 +299,19 @@ export async function POST(request: Request) {
 
   try {
     requestStage = "uploading and preparing both takes with Gemini";
-    const preparationResults = await Promise.allSettled(videos.map((video, index) => uploadAndPrepare(video, index, apiKey, (file) => uploadedFiles.push(file))));
-    const preparationFailure = preparationResults.find((result) => result.status === "rejected");
-    if (preparationFailure?.status === "rejected") throw preparationFailure.reason;
+    // Preserve earlier/newer ordering even when the uploads finish in a different order.
+    const preparedFiles: GeminiFile[] = [];
+    for (const [index, video] of videos.entries()) {
+      preparedFiles.push(await uploadAndPrepare(video, index, apiKey, (file) => uploadedFiles.push(file)));
+    }
 
     requestStage = "starting the streamed critique";
     const input: Array<{ type: "text"; text: string } | { type: "video"; uri: string; mime_type: string }> = videos.flatMap((video, index) => [
       { type: "text", text: index === 0 ? "Earlier take:" : "Newer take:" },
       {
         type: "video",
-        uri: uploadedFiles[index].uri!,
-        mime_type: uploadedFiles[index].mimeType === "video/quicktime" ? "video/mov" : uploadedFiles[index].mimeType === "video/x-msvideo" ? "video/avi" : uploadedFiles[index].mimeType!,
+        uri: preparedFiles[index].uri!,
+        mime_type: preparedFiles[index].mimeType === "video/quicktime" ? "video/mov" : preparedFiles[index].mimeType === "video/x-msvideo" ? "video/avi" : preparedFiles[index].mimeType!,
       },
     ]);
     if (savedBaseline && videos.length === 2) {
@@ -366,7 +377,7 @@ export async function POST(request: Request) {
         earlierHash,
         newerHash,
         earlierFilename: earlier.name,
-        newerFilename: newer instanceof File ? newer.name : null,
+        newerFilename: isUploadedVideo(newer) ? newer.name : null,
         model,
         critique,
       };
