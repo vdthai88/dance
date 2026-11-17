@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEvent, DragEvent } from "react";
 import { alignClipsByAudio } from "./lib/clip-alignment";
 import type { DanceCritique } from "./lib/gemini-critique";
+import { isDanceCritique } from "./lib/gemini-critique";
+import { readApiJson } from "./lib/api-response";
 import { AccountMenu } from "./components/account-menu";
 import { TeacherFeedbackPanel } from "./components/teacher-feedback-panel";
 import { SessionPanel } from "./components/session-panel";
@@ -169,8 +171,7 @@ export default function Home() {
     setBaselineLookupError("");
     try {
       const response = await fetch("/api/saved-critique", { method: "POST", body: form });
-      const result = await response.json() as SavedBaseline | { error?: string } | null;
-      if (!response.ok) throw new Error(result && "error" in result && result.error ? result.error : "Could not look up the saved critique.");
+      const result = await readApiJson(response, "Saved critique lookup") as SavedBaseline | null;
       if (lookupId === baselineLookupId.current) setSavedBaseline(result as SavedBaseline | null);
     } catch (caught) {
       if (lookupId === baselineLookupId.current) setBaselineLookupError(caught instanceof Error ? caught.message : "Could not look up the saved critique.");
@@ -231,8 +232,8 @@ export default function Home() {
         form.set("newerSongStart", String(newerSongStart));
       }
       const response = await fetch("/api/dance-critique", { method: "POST", body: form });
-      const result = await response.json() as DanceCritique | { error?: string };
-      if (!response.ok) throw new Error("error" in result && result.error ? result.error : "Gemini could not critique this video.");
+      const result = await readApiJson(response, "Video critique");
+      if (!isDanceCritique(result)) throw new Error("The server returned an invalid critique. Check Render Logs for this request, then retry.");
       setCritiqueCacheHit(response.headers.get("X-Critique-Cache") === "hit");
       setDanceCritique(result as DanceCritique);
     } catch (caught) {
