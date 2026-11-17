@@ -85,3 +85,13 @@
 .video-delete-all{background:#a34436;color:white}
 .video-delete-all:hover{background:#8b3228}
 @media(max-width:700px){.video-library{padding:15px}.video-library-heading{align-items:flex-start;flex-direction:column}.video-library-row{gap:10px}.video-library-heading h2{font-size:24px}}
+.sidebar-item:focus-visible{outline:2px solid #604bc2;outline-offset:3px}
+@media(max-width:700px){
+  html{scroll-padding-bottom:calc(90px + env(safe-area-inset-bottom,0px))}
+  .app-shell{padding-bottom:calc(90px + env(safe-area-inset-bottom,0px))}
+  .sidebar{display:flex;inset:auto 0 0;width:100%;height:auto;padding:8px max(12px,env(safe-area-inset-right,0px)) calc(8px + env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px));border-right:0;border-top:1px solid var(--line);box-shadow:0 -3px 15px #2c21400d}
+  .sidebar-logo,.sidebar-settings{display:none}
+  .sidebar-nav{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+  .sidebar .sidebar-item{height:48px;min-height:44px;gap:3px;padding:5px 8px;font-size:18px}
+  .sidebar .sidebar-item b{position:static;transform:none;opacity:1;visibility:visible;padding:0;background:transparent;color:inherit;font:600 11px/1.2 var(--sans);transition:none}
+}
