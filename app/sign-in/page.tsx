@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SocialAuthButtons } from "../components/social-auth-buttons";
+import { PasswordField } from "../components/password-field";
 import { enabledSocialProviders } from "../lib/social-auth";
 
 const messages: Record<string, string> = {
@@ -22,7 +23,7 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
     <form action="/api/local-auth/sign-in" method="post" className="auth-form">
       <input type="hidden" name="next" value={safeNext(params.next)} />
       <label>Email<input name="email" type="email" autoComplete="email" maxLength={320} required /></label>
-      <label>Password<input name="password" type="password" autoComplete="current-password" required /></label>
+      <PasswordField />
       <button type="submit">Sign in</button>
     </form>
     <SocialAuthButtons providers={providers} mode="sign-in" />

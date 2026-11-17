@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { auth } from "../../../lib/auth";
+import { callEmailAuth } from "../../../lib/email-auth-request";
 
 function copyCookies(source: Response, target: NextResponse) {
   const headers = source.headers as Headers & { getSetCookie?: () => string[] };
@@ -18,11 +20,7 @@ export async function POST(request: Request) {
   if (!/^\S+@\S+\.\S+$/.test(email) || !password) {
     return NextResponse.redirect(new URL("/sign-in?error=invalid-request", origin), { status: 303 });
   }
-  const authResponse = await fetch(new URL("/api/auth/sign-in/email", request.url), {
-    method: "POST",
-    headers: { Origin: origin, "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password, rememberMe: true }),
-  });
+  const authResponse = await callEmailAuth(auth.handler, request, "/api/auth/sign-in/email", { email, password, rememberMe: true });
   if (!authResponse.ok) {
     const error = authResponse.status === 429 ? "rate-limited" : "invalid-credentials";
     return NextResponse.redirect(new URL(`/sign-in?error=${error}`, origin), { status: 303 });

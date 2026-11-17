@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { auth } from "../../../lib/auth";
+import { callEmailAuth } from "../../../lib/email-auth-request";
 import { usesPostgres } from "../../../lib/database-driver";
 import { choosePgAccountRole } from "../../../lib/postgres-profile-store";
 import { chooseAccountRole } from "../../../lib/session-store";
@@ -21,11 +23,7 @@ export async function POST(request: Request) {
   if (!/^\S+@\S+\.\S+$/.test(email) || email.length > 320 || password.length < 8) {
     return NextResponse.redirect(new URL("/sign-up?error=invalid-request", origin), { status: 303 });
   }
-  const authResponse = await fetch(new URL("/api/auth/sign-up/email", request.url), {
-    method: "POST",
-    headers: { Origin: origin, "Content-Type": "application/json" },
-    body: JSON.stringify({ name, email, password }),
-  });
+  const authResponse = await callEmailAuth(auth.handler, request, "/api/auth/sign-up/email", { name, email, password });
   const payload = await authResponse.json().catch(() => null) as { user?: { id?: string } } | null;
   if (!authResponse.ok || !payload?.user?.id) {
     const error = authResponse.status === 429 ? "rate-limited" : "account-not-created";

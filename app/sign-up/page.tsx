@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SocialAuthButtons } from "../components/social-auth-buttons";
+import { PasswordField } from "../components/password-field";
 import { enabledSocialProviders } from "../lib/social-auth";
 
 const messages: Record<string, string> = {
@@ -17,7 +18,7 @@ export default async function SignUpPage({ searchParams }: { searchParams: Promi
     {error && <p className="auth-error" role="alert">{error}</p>}
     <form action="/api/local-auth/sign-up" method="post" className="auth-form">
       <label>Email<input name="email" type="email" autoComplete="email" maxLength={320} required /></label>
-      <label>Password<input name="password" type="password" autoComplete="new-password" minLength={8} required /></label>
+      <PasswordField autoComplete="new-password" minLength={8} />
       <fieldset className="role-picker"><legend>I am joining as a</legend><label><input type="radio" name="role" value="student" defaultChecked /> Student</label><label><input type="radio" name="role" value="teacher" /> Teacher</label></fieldset>
       <button type="submit">Create account</button>
     </form>

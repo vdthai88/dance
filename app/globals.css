@@ -95,3 +95,9 @@
   .sidebar .sidebar-item{height:48px;min-height:44px;gap:3px;padding:5px 8px;font-size:18px}
   .sidebar .sidebar-item b{position:static;transform:none;opacity:1;visibility:visible;padding:0;background:transparent;color:inherit;font:600 11px/1.2 var(--sans);transition:none}
 }
+.password-field{display:grid;gap:6px}
+.password-input-wrap{position:relative}
+.auth-form .password-input-wrap input{min-height:44px;padding-right:48px}
+.auth-form .password-visibility{position:absolute;top:0;right:0;display:grid;place-items:center;width:44px;height:100%;margin:0;padding:0;background:transparent;color:#716b79;border:0;border-radius:3px;cursor:pointer}
+.auth-form .password-visibility:hover{background:#8c6eea12;color:#604bc2}
+.auth-form .password-visibility:focus-visible{outline:2px solid #8c6eea;outline-offset:-3px}
