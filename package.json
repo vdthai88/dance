@@ -17,7 +17,7 @@
     "@aws-sdk/client-s3": "^3.1169.0",
     "@mediapipe/tasks-vision": "^1.1.1",
     "better-auth": "^1.7.19",
-    "next": "^16.4.2",
+    "next": "16.4.6",
     "pg": "^8.23.1",
     "react": "19.2.8",
     "react-dom": "19.2.8"
