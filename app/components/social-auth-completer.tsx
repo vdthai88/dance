@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { readApiJson } from "../lib/api-response";
 
 export function SocialAuthCompleter({ role }: { role: "student" | "teacher" | null }) {
   const router = useRouter();
@@ -16,10 +17,14 @@ export function SocialAuthCompleter({ role }: { role: "student" | "teacher" | nu
         if (!cancelled) setMessage("Your account was created, but we could not save its role. Please sign in again.");
         return;
       }
-      router.replace("/?page=profile&required=1");
+      const landingResponse = await fetch("/api/account/landing", { cache: "no-store" });
+      const landing = await readApiJson(landingResponse, "Account setup") as { destination?: string };
+      if (cancelled) return;
+      if (!landing.destination || !["/?page=profile&required=1", "/?page=replai", "/?page=coaching"].includes(landing.destination)) throw new Error("Could not determine your account's starting page. Please sign in again.");
+      router.replace(landing.destination);
       router.refresh();
     }
-    void complete();
+    void complete().catch((error: unknown) => { if (!cancelled) setMessage(error instanceof Error ? error.message : "Could not complete sign-in. Please try again."); });
     return () => { cancelled = true; };
   }, [role, router]);
 

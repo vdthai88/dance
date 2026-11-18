@@ -88,7 +88,7 @@ export function ProfilePage({ required = false, onComplete, teacherCompanies = [
   }
 
   return <section className="workspace profile-workspace" id="profile">
-    <div className="profile-heading"><div className="eyebrow muted">PROFILE</div><h1>{required ? "Complete your profile." : "Your details."}</h1><p>{required ? "First and last name are required before you can continue." : "Keep your account information up to date."}</p></div>
+    <div className="profile-heading"><div className="eyebrow muted">PROFILE</div><h1>{required ? "Complete your profile." : "Your details."}</h1><p className={required ? "profile-required-message" : undefined} role={required ? "alert" : undefined}>{required ? "First and last name are required before you can continue." : "Keep your account information up to date."}</p></div>
     <form className="profile-form" onSubmit={save}>
       <div className="account-details profile-wide"><div><span>Email address</span><strong>{profile.email || "Loading..."}</strong></div><div><span>Assigned roles</span><p>{profile.roles?.length ? profile.roles.map((role) => <b key={role}>{role}</b>) : "No roles assigned"}</p></div></div>
       <label>First Name<input value={profile.firstName} onChange={(event) => setProfile({ ...profile, firstName: event.target.value })} maxLength={100} required/></label>
