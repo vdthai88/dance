@@ -1,3 +1,5 @@
+export type ProgressStatus = "improved" | "keep_practising" | "new" | "unassessable";
+
 export type CritiqueObservation = {
   timestampSeconds: number | null;
   area: string;
@@ -6,6 +8,9 @@ export type CritiqueObservation = {
   exercise: string;
   confidence: "high" | "medium" | "low";
   video?: "earlier" | "new" | "both";
+  progressStatus?: ProgressStatus;
+  progressReason?: string;
+  baselineObservationIndex?: number | null;
 };
 
 export type DanceCritique = {
@@ -96,7 +101,9 @@ export const danceCritiqueSchema = {
   required: ["summary", "observations", "limitations"],
 };
 
-export const DANCE_COMPARISON_PROMPT = `Act as an experienced dance instructor comparing two practice videos of the same dancer. The first video is the earlier take; the second video is the newer take. Return at least five distinct, useful notes across posture, balance, alignment, footwork, arm placement, transitions, timing, musicality, control, and expression. Each note must give an observable strength, change, or improvement opportunity and a practical adjustment or exercise. Describe changes only when clearly visible in both videos. Do not infer improvement when the clips show different choreography, camera angles, framing, or conditions. Never invent issues to reach five notes: if an area is unclear, use low confidence, state the limitation, and give a cautious review cue based only on what can be seen. Distinguish clearly between evidence and uncertainty. Do not assign a score or grade. Timestamps must refer to the video named for that observation; use null when no precise moment is identifiable.`;
+export const DANCE_COMPARISON_PROMPT = `Act as an experienced dance instructor comparing two practice videos of the same dancer. The first video is the earlier take; the second video is the newer take. This review belongs to the newer take: assess progress against the earlier take and any supplied baseline critique, then add fresh observations about the newer performance. Explain which previous issues are resolved, still present, changed, or unassessable. Also identify new strengths and useful improvement opportunities when observable. Return at least five distinct, useful notes across posture, balance, alignment, footwork, arm placement, transitions, timing, musicality, control, and expression. Each note must give an observable strength, change, or improvement opportunity and a practical adjustment or exercise. Describe changes only when clearly visible in both videos. Do not infer improvement when the clips show different choreography, camera angles, framing, or conditions. Never invent issues to reach five notes: if an area is unclear, use low confidence, state the limitation, and give a cautious review cue based only on what can be seen. Distinguish clearly between evidence and uncertainty. Do not assign a score or grade. Mark observations as video "new" and use timestamps in the newer video, so each note can be reviewed with that video alone. Use null when no precise moment is identifiable.
+
+Classify every note with progressStatus independently of video: video "new" means the newer clip, NOT a new coaching point. Revisit each supplied baseline note using its baselineObservationIndex. Use "improved" only for observable progress, "keep_practising" when the same focus remains or needs more attention, and "unassessable" when footage, alignment, choreography, or camera differences prevent a reliable judgment. Use "new" only for genuinely additional observations that do not repeat a baseline point; its baselineObservationIndex must be null. Without a supplied baseline, use null for baselineObservationIndex and compare only clearly corresponding movements in both videos. Give a specific progressReason for every classification. Keep the language encouraging without concealing what still needs practice. Never infer progress from timing markers alone or treat an unseen issue as resolved.`;
 
 export const danceComparisonSchema = {
   ...danceCritiqueSchema,
@@ -111,8 +118,11 @@ export const danceComparisonSchema = {
         properties: {
           ...danceCritiqueSchema.properties.observations.items.properties,
           video: { type: "string", enum: ["earlier", "new", "both"], description: "Which clip this note refers to; timestamps refer to that clip." },
+          progressStatus: { type: "string", enum: ["improved", "keep_practising", "new", "unassessable"], description: "Progress classification, independent of which video contains the timestamp. improved: visible progress on a previous note; keep_practising: a previous focus still needs work, including unchanged or less controlled execution; new: a genuinely additional observation; unassessable: the same movement cannot be compared reliably." },
+          progressReason: { type: "string", description: "Explain the classification with concrete earlier-versus-newer evidence, or explain what is new or why comparison is uncertain. Be constructive and do not use worse, regression, or failure as labels." },
+          baselineObservationIndex: { type: ["integer", "null"], description: "The supplied baseline note's one-based index for a revisited note. Use null for a new note or a comparison without a supplied baseline note." },
         },
-        required: [...danceCritiqueSchema.properties.observations.items.required, "video"],
+        required: [...danceCritiqueSchema.properties.observations.items.required, "video", "progressStatus", "progressReason", "baselineObservationIndex"],
       },
     },
   },
@@ -136,6 +146,10 @@ export function isDanceCritique(value: unknown): value is DanceCritique {
         typeof observation.observation === "string" &&
         typeof observation.suggestedAdjustment === "string" &&
         typeof observation.exercise === "string" &&
+        (observation.progressStatus === undefined || ["improved", "keep_practising", "new", "unassessable"].includes(String(observation.progressStatus))) &&
+        (observation.progressReason === undefined || typeof observation.progressReason === "string") &&
+        (observation.baselineObservationIndex === undefined || observation.baselineObservationIndex === null ||
+          (typeof observation.baselineObservationIndex === "number" && Number.isInteger(observation.baselineObservationIndex) && observation.baselineObservationIndex > 0)) &&
         (observation.video === undefined || ["earlier", "new", "both"].includes(String(observation.video))) &&
         ["high", "medium", "low"].includes(String(observation.confidence))
       );
@@ -143,4 +157,13 @@ export function isDanceCritique(value: unknown): value is DanceCritique {
     Array.isArray(result.limitations) &&
     result.limitations.every((item) => typeof item === "string")
   );
+}
+
+/** New comparison responses require explicit progress; legacy saved critiques remain readable. */
+export function hasComparisonProgress(value: unknown, baselineCount?: number): value is DanceCritique {
+  return isDanceCritique(value) && typeof value.comparison === "string" && value.observations.every((note) =>
+    note.progressStatus !== undefined && typeof note.progressReason === "string" && note.progressReason.trim().length > 0 &&
+    note.baselineObservationIndex !== undefined &&
+    (note.baselineObservationIndex === null || baselineCount === undefined || note.baselineObservationIndex <= baselineCount) &&
+    (note.progressStatus !== "new" || note.baselineObservationIndex === null));
 }

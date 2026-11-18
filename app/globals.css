@@ -101,3 +101,42 @@
 .auth-form .password-visibility{position:absolute;top:0;right:0;display:grid;place-items:center;width:44px;height:100%;margin:0;padding:0;background:transparent;color:#716b79;border:0;border-radius:3px;cursor:pointer}
 .auth-form .password-visibility:hover{background:#8c6eea12;color:#604bc2}
 .auth-form .password-visibility:focus-visible{outline:2px solid #8c6eea;outline-offset:-3px}
+.ai-feedback-status h3{font-size:27px;line-height:1.25}
+.ai-feedback-status p{font-size:12px;line-height:1.7;color:var(--muted);margin:14px 0 22px}
+.ai-feedback-status .button{margin-top:8px}
+.ai-feedback-spinner{width:34px;height:34px;margin:22px 0;border:3px solid #ded6ed;border-top-color:#8c6eea;border-radius:50%;animation:spin .8s linear infinite}
+.library-create-group{display:flex;align-items:end;flex-wrap:wrap;gap:10px;margin:18px 0}
+.library-create-group label,.library-video-organization label,.saved-review-selector,.saved-review-controls label{display:grid;gap:5px;color:var(--muted);font-size:11px}
+.library-create-group input,.library-video-organization select,.saved-review-selector select,.saved-review-controls select{max-width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:4px;background:white;color:var(--ink);font:12px var(--sans)}
+.library-create-group input{width:min(280px,100%)}
+.library-group{margin-top:16px;padding:14px;border:1px solid var(--line);border-radius:5px;background:#fcfbff}
+.library-group-heading{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.library-group-toggle{display:flex;align-items:center;gap:10px;min-height:44px;padding:5px 0;border:0;background:none;color:var(--ink);font:14px var(--sans);cursor:pointer;text-align:left;min-width:0}
+.library-group-toggle strong{overflow-wrap:anywhere}
+.library-group-toggle small{color:var(--muted);font-size:11px;white-space:nowrap}
+.library-group .video-library-list{margin-top:8px}
+.library-video-organization{display:flex;align-items:end;flex-wrap:wrap;gap:14px;margin:12px 0}
+.library-newer-take{font-size:11px;cursor:pointer;position:relative}
+.library-newer-take.disabled{opacity:.5;cursor:wait}
+.library-newer-take:focus-within{outline:2px solid #8c6eea;outline-offset:2px}
+.saved-video-review{margin-top:15px}
+.saved-review-grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(260px,1fr);gap:18px;align-items:start}
+.saved-review-selector{margin-bottom:15px;max-width:100%}
+.saved-review-selector select{width:min(100%,440px)}
+.saved-review-videos{display:grid;grid-template-columns:1fr;gap:12px;min-width:0}
+.saved-review-videos.paired{grid-template-columns:repeat(2,minmax(0,1fr))}
+.saved-review-videos>div{min-width:0}
+.saved-review-videos strong{font-size:12px}
+.saved-review-videos p{font-size:11px;overflow-wrap:anywhere;color:var(--muted)}
+.saved-review-videos video{display:block;width:100%;max-height:460px;aspect-ratio:16/10;object-fit:contain;background:#161519;border-radius:3px}
+.saved-review-controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+@media(max-width:1000px){.saved-review-grid{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:600px){.saved-review-videos.paired{grid-template-columns:1fr}.video-library-row{align-items:flex-start;flex-wrap:wrap}.library-group{padding:10px}.library-create-group label{width:100%}.library-create-group input{width:100%}.library-video-organization select{max-width:200px}}
+.replai-name{white-space:nowrap}.replai-name em{color:#7659d2;font-style:italic;font-weight:inherit}.sidebar-item b .replai-name em{color:#c4b5fd}.sidebar-item.active b .replai-name em{color:inherit}
+.progress-badge{display:inline-flex;align-items:center;gap:5px;justify-self:start;padding:4px 7px;border-radius:12px;font:600 10px/1.3 var(--sans)}.progress-badge svg{flex:none}.progress-improved{background:#e9f5ed;color:#286341}.progress-keep_practising{background:#f0ebff;color:#6446aa}.progress-new{background:#e9efff;color:#3e5794}.progress-unassessable{background:#efedf1;color:#635d70}.progress-legacy-notice{font-size:11px;line-height:1.5;color:#746d80}.critique-card .progress-reason{font-size:11px;line-height:1.5}.critique-card .feedback-meta{gap:8px;flex-wrap:wrap}
+.comparison-alignment-controls{padding:12px 14px;border-bottom:1px solid var(--line);font-size:11px}.comparison-alignment-controls>p{line-height:1.5}.comparison-start-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:12px 0}.comparison-start-fields label{display:grid;gap:6px;overflow-wrap:anywhere}.comparison-start-fields input{min-width:0;width:100%;padding:9px;border:1px solid #ddd7ed;border-radius:4px;font:inherit}.comparison-alignment-controls>.text-button{margin-left:8px}@media(max-width:600px){.comparison-start-fields{grid-template-columns:1fr}}
+.critique-video-name{font-size:11px;line-height:1.5;color:#746d80;overflow-wrap:anywhere}
+.library-group-heading{flex-wrap:wrap}.library-group-heading>.library-group-toggle{flex:1}.library-group-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.library-group-actions .library-newer-take:disabled{opacity:.5;cursor:default}@media(max-width:600px){.library-group-heading>.library-group-toggle{flex-basis:100%}.library-group-actions{padding-bottom:8px}}
+.video-library-heading h2{font:600 20px/1.3 var(--sans)}@media(max-width:700px){.video-library-heading h2{font-size:18px}}
+.library-upload-area{margin:16px 0 24px}.library-upload-area .review-grid{margin-top:12px}
+.saved-review-video-heading{font-size:12px}.saved-review-video-heading p{margin:8px 0 12px;font-size:11px;overflow-wrap:anywhere;color:var(--muted)}.saved-review-grid{align-items:stretch}.saved-review-feedback{position:relative;min-height:0;min-width:0}.saved-review-feedback-inner{position:absolute;inset:0;overflow:auto;overscroll-behavior:contain}.saved-review-feedback-inner>.critique-card,.saved-review-feedback-inner>.aside-card{min-height:100%}.saved-review-feedback-inner>.insights-column{height:100%;display:flex;flex-direction:column}.saved-review-feedback-inner .ai-feedback-status{min-height:0;flex:1}.saved-review-feedback-inner .ai-feedback-status:only-child{height:100%}@media(max-width:1000px){.saved-review-feedback-inner{position:static;overflow:visible}.saved-review-feedback-inner>.insights-column{height:auto}.saved-review-feedback-inner .ai-feedback-status{min-height:220px;height:auto}}

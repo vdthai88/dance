@@ -19,7 +19,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const mimeType = audio.type.split(";")[0].toLowerCase();
   if (!AUDIO_MIME_TYPES.has(mimeType) || audio.size > 14 * 1024 * 1024) return NextResponse.json({ error: "Use a short recording from Chrome or Edge to update this note." }, { status: 400 });
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return NextResponse.json({ error: "Add GEMINI_API_KEY to dance/.env.local, then restart the development server." }, { status: 503 });
+  if (!apiKey) return NextResponse.json({ error: "AI feedback has not been configured for this environment." }, { status: 503 });
   const user = await getAuthenticatedUser(request);
   if (!user) return NextResponse.json({ error: "Sign in to update feedback." }, { status: 401 });
   const existing = usesPostgres() ? await findPgSessionTeacherFeedback(id) : findSessionTeacherFeedback(id);
@@ -41,9 +41,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     });
     const payload = await response.json().catch(() => null) as { status?: string; output_text?: string; steps?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }>; error?: { message?: string } } | null;
     const output = payload?.output_text ?? payload?.steps?.filter((step) => step.type === "model_output").flatMap((step) => step.content ?? []).filter((part) => part.type === "text").map((part) => part.text ?? "").join("") ?? "";
-    if (!response.ok || !output || (payload?.status && payload.status !== "completed")) return NextResponse.json({ error: payload?.error?.message || "Gemini could not update this coaching note." }, { status: response.status === 429 || response.status === 503 ? response.status : 502 });
+    if (!response.ok || !output || (payload?.status && payload.status !== "completed")) return NextResponse.json({ error: "AI could not update this coaching note. Please try again." }, { status: response.status === 429 || response.status === 503 ? response.status : 502 });
     const updated: unknown = JSON.parse(output);
-    if (!isTeacherFeedback(updated)) return NextResponse.json({ error: "Gemini returned an invalid updated note. Try recording again." }, { status: 502 });
+    if (!isTeacherFeedback(updated)) return NextResponse.json({ error: "AI returned an invalid updated note. Try recording again." }, { status: 502 });
     return NextResponse.json(usesPostgres() ? await updatePgSessionTeacherFeedback(id, updated) : updateSessionTeacherFeedback(id, updated));
   } catch (error) {
     console.error("Could not update teacher feedback from recording:", error);

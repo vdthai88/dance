@@ -243,10 +243,16 @@ export async function alignClipsByAudio(
     readAudio(newerFile, (progress) => { newerProgress = progress; reportAudioProgress(); }),
   ]);
   onProgress(0.9);
-  const earlierAfterPause = findSoundAfterSilence(earlierAudio.levels);
-  const newerAfterPause = findSoundAfterSilence(newerAudio.levels);
+  const match = matchAudioFrames(earlierAudio.levels, newerAudio.levels);
+  onProgress(1);
+  return match;
+}
+
+/** Compare already sampled audio, independent of browser playback and capture. */
+export function matchAudioFrames(earlierFrames: AudioFrame[], newerFrames: AudioFrame[]): ClipMatch {
+  const earlierAfterPause = findSoundAfterSilence(earlierFrames);
+  const newerAfterPause = findSoundAfterSilence(newerFrames);
   if (earlierAfterPause !== null && newerAfterPause !== null) {
-    onProgress(1);
     return {
       earlierSeconds: earlierAfterPause,
       newerSeconds: newerAfterPause,
@@ -256,11 +262,9 @@ export async function alignClipsByAudio(
       method: "silence-pause",
     };
   }
-  if (earlierAfterPause !== null || newerAfterPause !== null) {
-    const found = earlierAfterPause !== null ? "earlier" : "newer";
-    throw new Error(`A silence pause was found in the ${found} clip but not both. Set both song start markers manually so the clips stay aligned.`);
-  }
-  const candidates = audioMatches(earlierAudio.levels, newerAudio.levels, 4);
+  // One recording may have audience noise throughout its introduction. A pause
+  // in only one clip does not prevent matching the shared music in both tracks.
+  const candidates = audioMatches(earlierFrames, newerFrames, 4);
   if (!candidates.length) {
     throw new Error("No shared music section was found in the first 25 seconds. Try clips with more music, or adjust the markers manually.");
   }
@@ -275,7 +279,6 @@ export async function alignClipsByAudio(
   if (runnerUp && confidenceMargin < MIN_CONFIDENCE_MARGIN) {
     throw new Error(`The audio match is ambiguous: the best offset scored ${Math.round(best.score * 100)}%, but another timing offset scored ${Math.round(runnerUp.score * 100)}%. Try a longer section with distinct music or adjust the markers manually.`);
   }
-  onProgress(1);
   return {
     earlierSeconds: best.a * HOP_SECONDS,
     newerSeconds: best.b * HOP_SECONDS,

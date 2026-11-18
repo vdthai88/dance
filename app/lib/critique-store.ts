@@ -4,6 +4,8 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { DanceCritique, TeacherFeedback } from "./gemini-critique";
 import { isDanceCritique, isTeacherFeedback } from "./gemini-critique";
+import { makeCritiqueKey } from "./critique-key";
+export { makeCritiqueKey } from "./critique-key";
 
 export type CritiqueVideos = {
   earlier: File;
@@ -18,6 +20,8 @@ export type CritiqueRecord = {
   newerFilename: string | null;
   model: string;
   critique: DanceCritique;
+  earlierSongStart?: number;
+  newerSongStart?: number;
 };
 
 export type SavedVideoCritique = {
@@ -239,6 +243,9 @@ export function openDanceDatabase() {
   db.prepare(`INSERT OR IGNORE INTO student_company_assignments (student_id, company_id, permission)
     SELECT id, organization_id, 'manage' FROM students WHERE organization_id IS NOT NULL`).run();
   const columns = db.prepare("PRAGMA table_info(critiques)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "owner_user_id")) {
+    db.exec("ALTER TABLE critiques ADD COLUMN owner_user_id TEXT");
+  }
   if (!columns.some((column) => column.name === "earlier_filename")) {
     db.exec("ALTER TABLE critiques ADD COLUMN earlier_filename TEXT NOT NULL DEFAULT ''");
   }
@@ -317,17 +324,11 @@ export async function fingerprintVideo(video: File): Promise<string> {
   return hash.digest("hex");
 }
 
-export function makeCritiqueKey(earlierHash: string, newerHash: string | null): string {
-  return createHash("sha256")
-    .update(newerHash ? `comparison\0${earlierHash}\0${newerHash}` : `single\0${earlierHash}`)
-    .digest("hex");
-}
-
-export function findCritique(key: string): CritiqueRecord | null {
+export function findCritique(key: string, userId: string): CritiqueRecord | null {
   const db = openDanceDatabase();
   try {
     const row = db.prepare(`SELECT cache_key, earlier_sha256, newer_sha256, earlier_filename, newer_filename, model, critique_json
-      FROM critiques WHERE cache_key = ?`).get(key) as {
+      FROM critiques WHERE cache_key = ? AND owner_user_id = ?`).get(key, userId) as {
         cache_key: string;
         earlier_sha256: string;
         newer_sha256: string | null;
@@ -362,12 +363,12 @@ export function findCritique(key: string): CritiqueRecord | null {
   }
 }
 
-export function findCritiqueForVideo(videoHash: string): SavedVideoCritique | null {
+export function findCritiqueForVideo(videoHash: string, userId: string): SavedVideoCritique | null {
   const db = openDanceDatabase();
   try {
     const row = db.prepare(`SELECT cache_key, earlier_filename, model, critique_json, created_at
-      FROM critiques WHERE earlier_sha256 = ? AND newer_sha256 IS NULL
-      ORDER BY created_at DESC LIMIT 1`).get(videoHash) as {
+      FROM critiques WHERE earlier_sha256 = ? AND owner_user_id = ? AND newer_sha256 IS NULL
+      ORDER BY created_at DESC LIMIT 1`).get(videoHash, userId) as {
         cache_key: string;
         earlier_filename: string;
         model: string;
@@ -392,18 +393,20 @@ export function findCritiqueForVideo(videoHash: string): SavedVideoCritique | nu
   }
 }
 
-export function saveCritique(record: CritiqueRecord): void {
+export function saveCritique(record: CritiqueRecord, userId: string): void {
+  if (record.key !== makeCritiqueKey(record.earlierHash, record.newerHash, userId)) throw new Error("The critique key does not belong to this account.");
   const db = openDanceDatabase();
   try {
-    db.prepare(`INSERT INTO critiques (cache_key, earlier_sha256, newer_sha256, earlier_filename, newer_filename, model, critique_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+    const result = db.prepare(`INSERT INTO critiques (cache_key, earlier_sha256, newer_sha256, earlier_filename, newer_filename, model, critique_json, owner_user_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(cache_key) DO UPDATE SET
         earlier_filename = excluded.earlier_filename,
         newer_filename = excluded.newer_filename,
         model = excluded.model,
         critique_json = excluded.critique_json,
-        created_at = CURRENT_TIMESTAMP`)
-      .run(record.key, record.earlierHash, record.newerHash, record.earlierFilename, record.newerFilename, record.model, JSON.stringify(record.critique));
+        created_at = CURRENT_TIMESTAMP WHERE critiques.owner_user_id = excluded.owner_user_id`)
+      .run(record.key, record.earlierHash, record.newerHash, record.earlierFilename, record.newerFilename, record.model, JSON.stringify(record.critique), userId);
+    if (!result.changes) throw new Error("The critique could not be saved for this account.");
   } finally {
     db.close();
   }

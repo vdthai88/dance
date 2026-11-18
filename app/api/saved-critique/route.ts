@@ -21,7 +21,7 @@ export async function POST(request: Request) {
     const video = form.get("video");
     if (!isUploadedVideo(video)) return NextResponse.json({ error: "Choose a video to look up its saved critique." }, { status: 400 });
     const hash = video.sha256;
-    const saved = usesPostgres() ? await findPgCritiqueForVideo(hash, user.id) : findCritiqueForVideo(hash);
+    const saved = usesPostgres() ? await findPgCritiqueForVideo(hash, user.id) : findCritiqueForVideo(hash, user.id);
     return NextResponse.json(saved);
   } catch (error) {
     console.error("Could not look up the saved critique:", error);

@@ -5,8 +5,10 @@ import {
   danceCritiqueSchema,
   danceComparisonSchema,
   isDanceCritique,
+  hasComparisonProgress,
 } from "../../lib/gemini-critique";
 import { usesPostgres } from "../../lib/database-driver";
+import { parseSongAlignment, sameSongAlignment } from "../../lib/comparison-alignment";
 import { getAuthenticatedUser } from "../../lib/auth-session";
 import { findCritique, findCritiqueForVideo, makeCritiqueKey, saveCritique } from "../../lib/critique-store";
 import { attachPgSessionCritique, findPgCritique, findPgCritiqueForVideo, savePgCritique } from "../../lib/postgres-critique-store";
@@ -48,7 +50,7 @@ async function uploadAndPrepare(video: UploadedVideo, index: number, apiKey: str
   }
 
   const uploadUrl = startUpload.headers.get("x-goog-upload-url");
-  if (!uploadUrl) throw new GeminiRequestError("Gemini did not provide an upload location. Please try again.", 502);
+  if (!uploadUrl) throw new GeminiRequestError("AI did not provide an upload location. Please try again.", 502);
 
   const uploadResponse = await fetch(uploadUrl, {
     method: "POST",
@@ -64,7 +66,7 @@ async function uploadAndPrepare(video: UploadedVideo, index: number, apiKey: str
   const uploadResult = await uploadResponse.json() as { file?: GeminiFile };
   const uploadedFile = uploadResult.file;
   if (!uploadedFile?.uri || !uploadedFile.mimeType || !uploadedFile.name) {
-    throw new GeminiRequestError("Gemini did not return a usable video upload. Please try again.", 502);
+    throw new GeminiRequestError("AI did not return a usable video upload. Please try again.", 502);
   }
   trackUpload(uploadedFile);
 
@@ -79,10 +81,10 @@ async function uploadAndPrepare(video: UploadedVideo, index: number, apiKey: str
     const statusResult = await statusResponse.json() as GeminiFile;
     state = statusResult.state;
   }
-  if (state === "PROCESSING") throw new GeminiRequestError("Gemini is still preparing a video. Please try shorter clips.", 504);
+  if (state === "PROCESSING") throw new GeminiRequestError("AI is still preparing a video. Please try shorter clips.", 504);
   if (state === "FAILED") {
     const take = index === 0 ? "earlier" : "newer";
-    throw new GeminiRequestError(`Gemini could not process the ${take} take. Re-export it as a standard MP4 with H.264 video and AAC audio, then retry.`, 422);
+    throw new GeminiRequestError(`AI could not process the ${take} take. Re-export it as a standard MP4 with H.264 video and AAC audio, then retry.`, 422);
   }
   return uploadedFile;
 }
@@ -92,7 +94,7 @@ function jsonError(message: string, status: number) {
 }
 
 async function readInteractionStream(response: Response) {
-  if (!response.body) throw new Error("Gemini returned an empty response stream.");
+  if (!response.body) throw new Error("AI returned an empty response stream.");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const contentType = response.headers.get("content-type") ?? "unknown";
@@ -191,7 +193,7 @@ async function fetchModelWithRetry(url: string, init: RequestInit) {
   let response = await fetch(url, init);
   if (response.status !== 503) return response;
 
-  console.warn("Gemini is temporarily overloaded; retrying the model request once.");
+  console.warn("AI is temporarily overloaded; retrying the model request once.");
   await response.body?.cancel().catch(() => undefined);
   await new Promise((resolve) => setTimeout(resolve, 2000));
   response = await fetch(url, init);
@@ -200,19 +202,19 @@ async function fetchModelWithRetry(url: string, init: RequestInit) {
 
 async function responseError(response: Response) {
   const payload = await response.json().catch(() => null) as { error?: { message?: string } } | null;
-  const message = payload?.error?.message ?? "Gemini could not process the video.";
+  const message = payload?.error?.message ?? "AI could not process the video.";
   if (response.status === 401 || response.status === 403) {
-    return { message: "Gemini rejected the API key or this project does not have access. Check GEMINI_API_KEY in dance/.env.local.", status: 502 };
+    return { message: "AI feedback is unavailable because of a service configuration issue. Please try again later.", status: 502 };
   }
   if (response.status === 429) {
-    return { message: "Gemini reached a usage or rate limit. Check the project's AI Studio quota and try again later.", status: 429 };
+    return { message: "AI reached a usage or rate limit. Please try again later.", status: 429 };
   }
   if (response.status === 503) {
-    console.warn("Gemini is still overloaded after a retry:", message);
-    return { message: "Gemini is temporarily busy and could not start the critique. Wait a minute, then try again.", status: 503 };
+    console.warn("AI is still overloaded after a retry:", message);
+    return { message: "AI is temporarily busy and could not start the critique. Wait a minute, then try again.", status: 503 };
   }
-  console.error("Gemini dance critique request failed:", response.status, message);
-  return { message: "Gemini could not complete the critique. Check the VS Code terminal for details, then try again.", status: 502 };
+  console.error("AI dance critique request failed:", response.status, message);
+  return { message: "AI could not complete the critique. Check the VS Code terminal for details, then try again.", status: 502 };
 }
 
 export async function POST(request: Request) {
@@ -240,7 +242,7 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
   if (videos.some((video) => !MIME_TYPES.has(video.type))) return jsonError("Use MP4, MOV, WebM, MPEG, or AVI videos.", 415);
   if (videos.some((video) => video.size === 0)) return jsonError("A selected video is empty.", 400);
   if (videos.some((video) => video.size > MAX_VIDEO_BYTES) || videos.reduce((sum, video) => sum + video.size, 0) > MAX_VIDEO_BYTES) {
-    return jsonError("Gemini critique supports up to 250 MB total across both videos.", 413);
+    return jsonError("AI critique supports up to 250 MB total across both videos.", 413);
   }
 
   const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
@@ -250,14 +252,14 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
   let newerHash: string | null = null;
   let cacheKey: string;
   let savedBaseline: ReturnType<typeof findCritiqueForVideo> = null;
-  const earlierSongStartValue = Number(form.get("earlierSongStart"));
-  const newerSongStartValue = Number(form.get("newerSongStart"));
-  const earlierSongStart = Number.isFinite(earlierSongStartValue) && earlierSongStartValue >= 0 ? earlierSongStartValue : 0;
-  const newerSongStart = Number.isFinite(newerSongStartValue) && newerSongStartValue >= 0 ? newerSongStartValue : 0;
+  const alignment = isUploadedVideo(newer) ? parseSongAlignment(form.get("earlierSongStart"), form.get("newerSongStart"), form.get("alignmentSource")) : null;
+  if (isUploadedVideo(newer) && !alignment) return jsonError("Confirm both song start times before requesting a comparison. Audio alignment has not been confirmed.", 422);
+  const earlierSongStart = alignment?.earlierSongStart ?? 0;
+  const newerSongStart = alignment?.newerSongStart ?? 0;
   try {
     earlierHash = earlier.sha256;
     if (isUploadedVideo(newer)) newerHash = newer.sha256;
-    cacheKey = makeCritiqueKey(earlierHash, newerHash);
+    cacheKey = makeCritiqueKey(earlierHash, newerHash, user.id);
     if (sessionId) {
       if (usesPostgres()) {
         const hasAccess = await pgCanAccessSession(user.id, sessionId, true) || await pgCanAccessSession(user.id, sessionId, false);
@@ -275,15 +277,15 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
         if (isUploadedVideo(newer) && newerHash && !attachSessionVideo(sessionId, newerHash, newer.name)) return jsonError("Practice session not found. Select the session again.", 404);
       }
     }
-    const cached = usesPostgres() ? await findPgCritique(cacheKey, user.id) : findCritique(cacheKey);
-    if (cached) {
+    const cached = usesPostgres() ? await findPgCritique(cacheKey, user.id) : findCritique(cacheKey, user.id);
+    if (cached && (!isUploadedVideo(newer) || (alignment && hasComparisonProgress(cached.critique) && sameSongAlignment(cached, alignment)))) {
       if (sessionId) {
-        if (usesPostgres()) await attachPgSessionCritique(sessionId, cached.key);
+        if (usesPostgres()) await attachPgSessionCritique(sessionId, cached.key, user.id);
         else attachSessionCritique(sessionId, cached.key);
       }
       return NextResponse.json(cached.critique, { headers: { "X-Critique-Cache": "hit" } });
     }
-    if (isUploadedVideo(newer)) savedBaseline = usesPostgres() ? await findPgCritiqueForVideo(earlierHash, user.id) : findCritiqueForVideo(earlierHash);
+    if (isUploadedVideo(newer)) savedBaseline = usesPostgres() ? await findPgCritiqueForVideo(earlierHash, user.id) : findCritiqueForVideo(earlierHash, user.id);
   } catch (error) {
     console.error("Could not read the local critique database:", error);
     return jsonError("The local critique database could not be read. Check the server terminal and try again.", 500);
@@ -291,14 +293,14 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return jsonError("Add GEMINI_API_KEY to dance/.env.local, then restart the development server.", 503);
+    return jsonError("AI feedback has not been configured for this environment.", 503);
   }
 
   const uploadedFiles: GeminiFile[] = [];
-  let requestStage = "starting the Gemini file upload";
+  let requestStage = "starting the AI file upload";
 
   try {
-    requestStage = "uploading and preparing both takes with Gemini";
+    requestStage = "uploading and preparing both takes with AI";
     // Preserve earlier/newer ordering even when the uploads finish in a different order.
     const preparedFiles: GeminiFile[] = [];
     for (const [index, video] of videos.entries()) {
@@ -315,8 +317,9 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
       },
     ]);
     if (savedBaseline && videos.length === 2) {
-      const mappedObservations = savedBaseline.critique.observations.map((observation) => ({
+      const mappedObservations = savedBaseline.critique.observations.map((observation, index) => ({
         ...observation,
+        baselineObservationIndex: index + 1,
         earlierTimestampSeconds: observation.timestampSeconds,
         newerTimestampSeconds: observation.timestampSeconds === null
           ? null
@@ -345,10 +348,10 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
       return jsonError(failure.message, failure.status);
     }
 
-    requestStage = "waiting for Gemini to analyze the video";
+    requestStage = "waiting for AI to analyze the video";
     const interaction = await readInteractionStream(interactionResponse);
     if (interaction.failure || interaction.status !== "completed") {
-      console.error("Gemini critique stream ended without a complete response:", JSON.stringify({
+      console.error("AI critique stream ended without a complete response:", JSON.stringify({
         id: interaction.id,
         status: interaction.status,
         error: interaction.failure,
@@ -358,18 +361,21 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
         eventTypes: interaction.eventTypes,
         responseChars: interaction.responseChars,
       }));
-      return jsonError("Gemini could not complete this critique. Check the terminal for the interaction status and try again.", 502);
+      return jsonError("AI could not complete this critique. Check the terminal for the interaction status and try again.", 502);
     }
     const text = interaction.text;
-    if (!text) return jsonError("Gemini returned an empty critique. Please try again.", 502);
+    if (!text) return jsonError("AI returned an empty critique. Please try again.", 502);
 
     let critique: unknown;
     try {
       critique = JSON.parse(text);
     } catch {
-      return jsonError("Gemini returned a critique in an unexpected format. Please try again.", 502);
+      return jsonError("AI returned a critique in an unexpected format. Please try again.", 502);
     }
-    if (!isDanceCritique(critique)) return jsonError("Gemini's critique did not match the expected format. Please try again.", 502);
+    if (!isDanceCritique(critique)) return jsonError("AI's critique did not match the expected format. Please try again.", 502);
+    if (videos.length === 2 && !hasComparisonProgress(critique, savedBaseline?.critique.observations.length ?? 0)) {
+      return jsonError("AI did not provide valid progress labels for this comparison. Please try again.", 502);
+    }
 
     try {
       const record = {
@@ -380,16 +386,18 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
         newerFilename: isUploadedVideo(newer) ? newer.name : null,
         model,
         critique,
+        earlierSongStart,
+        newerSongStart,
       };
       if (usesPostgres()) await savePgCritique(record, user.id);
-      else saveCritique(record);
+      else saveCritique(record, user.id);
       if (sessionId) {
-        if (usesPostgres()) await attachPgSessionCritique(sessionId, cacheKey);
+        if (usesPostgres()) await attachPgSessionCritique(sessionId, cacheKey, user.id);
         else attachSessionCritique(sessionId, cacheKey);
       }
     } catch (error) {
       console.error("Could not save the critique to the local database:", error);
-      return jsonError("Gemini returned a critique, but the local database could not save it. Check the server terminal.", 500);
+      return jsonError("AI returned a critique, but the local database could not save it. Check the server terminal.", 500);
     }
     return NextResponse.json(critique, { headers: { "X-Critique-Cache": "miss" } });
   } catch (error) {
@@ -399,7 +407,7 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
     console.error(`Dance critique failed while ${requestStage}:`, error);
     return jsonError(
       headersTimedOut
-        ? `Gemini timed out while ${requestStage}. Check the connection and retry with a shorter clip.`
+        ? `AI timed out while ${requestStage}. Check the connection and retry with a shorter clip.`
         : "The critique request failed. Check the server terminal and try again.",
       headersTimedOut ? 504 : 502,
     );
@@ -411,7 +419,7 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
           headers: { "x-goog-api-key": apiKey },
         });
       } catch (error) {
-        console.error("Could not delete temporary Gemini video:", error);
+        console.error("Could not delete temporary AI video:", error);
       }
     }
   }

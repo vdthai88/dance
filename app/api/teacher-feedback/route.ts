@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "This recording is too large. Keep teacher notes under about 10 minutes and record again." }, { status: 413 });
   }
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return NextResponse.json({ error: "Add GEMINI_API_KEY to dance/.env.local, then restart the dev server." }, { status: 503 });
+  if (!apiKey) return NextResponse.json({ error: "AI feedback has not been configured for this environment." }, { status: 503 });
 
   const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
   try {
@@ -68,13 +68,13 @@ export async function POST(request: Request) {
     });
     const payload = await response.json().catch(() => null) as GeminiInteraction | null;
     if (!response.ok) {
-      const detail = payload?.error?.message ?? "Gemini could not summarize the recording.";
-      console.error("Gemini teacher-feedback request failed:", response.status, detail);
+      const detail = payload?.error?.message ?? "AI could not summarize the recording.";
+      console.error("AI teacher-feedback request failed:", response.status, detail);
       return NextResponse.json({ error: response.status === 429
-        ? "Gemini reached a usage or rate limit. Try again later."
+        ? "AI reached a usage or rate limit. Try again later."
         : response.status === 503
-          ? "Gemini is temporarily busy. Wait a minute, then try again."
-          : "Gemini could not summarize the recording. Check the VS Code terminal for details." }, { status: response.status === 429 || response.status === 503 ? response.status : 502 });
+          ? "AI is temporarily busy. Wait a minute, then try again."
+          : "AI could not summarize the recording. Check the VS Code terminal for details." }, { status: response.status === 429 || response.status === 503 ? response.status : 502 });
     }
     const output = payload?.output_text ?? payload?.steps
       ?.filter((step) => step.type === "model_output")
@@ -83,14 +83,14 @@ export async function POST(request: Request) {
       .map((part) => part.text ?? "")
       .join("") ?? "";
     if (!output || (payload?.status && payload.status !== "completed")) {
-      console.error("Gemini returned an incomplete teacher summary:", JSON.stringify({ status: payload?.status }));
-      return NextResponse.json({ error: "Gemini could not complete the teacher summary. Please try again." }, { status: 502 });
+      console.error("AI returned an incomplete teacher summary:", JSON.stringify({ status: payload?.status }));
+      return NextResponse.json({ error: "AI could not complete the teacher summary. Please try again." }, { status: 502 });
     }
     let parsed: unknown;
     try { parsed = JSON.parse(output); }
-    catch { return NextResponse.json({ error: "Gemini returned an unexpected summary format. Please try again." }, { status: 502 }); }
+    catch { return NextResponse.json({ error: "AI returned an unexpected summary format. Please try again." }, { status: 502 }); }
     if (!isTeacherFeedback(parsed)) {
-      return NextResponse.json({ error: "Gemini's summary did not match the expected action-item format. Please try again." }, { status: 502 });
+      return NextResponse.json({ error: "AI's summary did not match the expected action-item format. Please try again." }, { status: 502 });
     }
     const saved = usesPostgres()
       ? await savePgSessionTeacherFeedback({ sessionId, model, feedback: parsed })

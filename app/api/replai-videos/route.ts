@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAuthenticatedUser } from "../../lib/auth-session";
 import { usesPostgres } from "../../lib/database-driver";
-import { listLibraryVideos, savePersonalVideo } from "../../lib/video-library-store";
+import { findDuplicatePersonalVideo, findLibraryVideo, listLibraryVideos, listVideoGroups, savePersonalVideo } from "../../lib/video-library-store";
 import { isUploadedVideo, readVideoUpload, VideoUploadError } from "../../lib/video-upload";
 import type { VideoUpload } from "../../lib/video-upload";
 import { saveLocalVideo } from "../../lib/video-storage";
@@ -29,9 +29,19 @@ export async function POST(request: Request) {
     form = await readVideoUpload(request, ["video"]);
     const video = form.get("video");
     if (!isUploadedVideo(video) || !video.size || !video.type.startsWith("video/")) return NextResponse.json({ error: "Choose a nonempty video file." }, { status: 400 });
+    const groupId = form.get("groupId");
+    const earlierVideoId = form.get("earlierVideoId");
+    if (earlierVideoId !== null && (typeof earlierVideoId !== "string" || !earlierVideoId || !await findLibraryVideo(user.id, earlierVideoId))) {
+      return NextResponse.json({ error: "The earlier video is unavailable. Refresh your library and try again." }, { status: 400 });
+    }
+    if (groupId !== null && (typeof groupId !== "string" || !(await listVideoGroups(user.id)).some((group) => group.id === groupId))) {
+      return NextResponse.json({ error: "The selected video group is unavailable. Refresh your library and try again." }, { status: 400 });
+    }
+    const duplicate = await findDuplicatePersonalVideo(user.id, video.sha256);
+    if (duplicate) return NextResponse.json(duplicate);
     const objectKey = await saveLocalVideo({ companyId: null, studentId: user.id, sessionId: "replai", hash: video.sha256, filename: video.name, filePath: video.path, byteSize: video.size });
-    const saved = await savePersonalVideo({ userId: user.id, filename: video.name, contentType: video.type, byteSize: video.size, hash: video.sha256, objectKey });
-    return NextResponse.json(saved, { status: 201 });
+    const saved = await savePersonalVideo({ userId: user.id, filename: video.name, contentType: video.type, byteSize: video.size, hash: video.sha256, objectKey, groupId, earlierVideoId });
+    return NextResponse.json(saved, { status: saved.alreadyExists ? 200 : 201 });
   } catch (error) {
     if (error instanceof VideoUploadError) return NextResponse.json({ error: error.message }, { status: error.status });
     console.error("Could not save ReplAI video:", error);
