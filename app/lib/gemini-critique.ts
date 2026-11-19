@@ -18,6 +18,7 @@ export type DanceCritique = {
   observations: CritiqueObservation[];
   limitations: string[];
   comparison?: string;
+  subject?: { description: string; referenceSeconds: number };
 };
 
 export type TeacherFeedback = {

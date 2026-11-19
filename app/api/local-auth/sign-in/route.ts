@@ -13,7 +13,7 @@ export async function POST(request: Request) {
   const email = typeof form.get("email") === "string" ? String(form.get("email")).trim().toLowerCase() : "";
   const password = typeof form.get("password") === "string" ? String(form.get("password")) : "";
   const requestedNext = typeof form.get("next") === "string" ? String(form.get("next")) : "/";
-  const next = requestedNext.startsWith("/") && !requestedNext.startsWith("//") ? requestedNext : "/";
+  const next = requestedNext.startsWith("/") && !requestedNext.startsWith("//") && !/[\\\s]/.test(requestedNext) ? requestedNext : "/";
   // Next dev is bound to 0.0.0.0, but the browser's Origin is the actual
   // Wi-Fi address. Better Auth must validate that browser origin, not 0.0.0.0.
   const origin = request.headers.get("origin") || process.env.BETTER_AUTH_URL || new URL(request.url).origin;
@@ -22,7 +22,11 @@ export async function POST(request: Request) {
   }
   const authResponse = await callEmailAuth(auth.handler, request, "/api/auth/sign-in/email", { email, password, rememberMe: true });
   if (!authResponse.ok) {
-    const error = authResponse.status === 429 ? "rate-limited" : "invalid-credentials";
+    const result = await authResponse.json().catch(() => null) as { code?: string } | null;
+    if (result?.code === "EMAIL_NOT_VERIFIED") {
+      return NextResponse.redirect(new URL("/sign-in?verification=resent", origin), { status: 303 });
+    }
+    const error = authResponse.status === 429 ? "rate-limited" : authResponse.status === 503 ? "verification-delivery" : "invalid-credentials";
     return NextResponse.redirect(new URL(`/sign-in?error=${error}`, origin), { status: 303 });
   }
   const response = NextResponse.redirect(new URL(next, origin), { status: 303 });

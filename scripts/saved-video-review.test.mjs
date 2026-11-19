@@ -22,6 +22,9 @@ const { ReviewPlayer, SavedVideoReview } = loadComponent('../app/components/save
   './critique-card': card,
   '../lib/api-response': { readApiJson() { throw new Error('No API call is expected during server rendering'); } },
 }, '\nexport { ReviewPlayer };');
+const { DancerSelectionPanel } = loadComponent('../app/components/dancer-selection-panel.tsx', {
+  '../lib/api-response': { readApiJson() { throw new Error('No API call is expected during server rendering'); } },
+});
 const video = { id: 'saved-video', filename: 'practice.mp4', available: true };
 const review = { comparison: false, critique: { summary: 'Finished feedback in the saved review.', observations: [], limitations: [] } };
 const pendingContent = React.createElement('aside', { role: 'status' }, 'AI is reviewing your video');
@@ -46,4 +49,16 @@ test('a newly saved upload can display its player and processing status before f
   assert.equal((html.match(/<video\b/g) ?? []).length, 1);
   assert.match(html, /AI is reviewing your video/);
   assert.doesNotMatch(html, /No AI critique is saved/);
+});
+
+test('dancer confirmation uses a reference frame without adding a second visible player', () => {
+  const selection = React.createElement(DancerSelectionPanel, { videoId: video.id, title: video.filename,
+    detection: { status: 'multiple', confidence: 'high', referenceSeconds: 2, candidates: [{ description: 'Left dancer' }, { description: 'Right dancer' }], explanation: 'Two dancers excluding reflections.' }, onChosen() {} });
+  const html = renderToStaticMarkup(React.createElement(ReviewPlayer, { video, review: null, pendingContent: selection }));
+  assert.equal((html.match(/<video\b/g) ?? []).length, 1);
+  assert.match(html, /<canvas/);
+  assert.match(html, /Who should AI focus on/);
+  assert.match(html, /Left dancer/);
+  assert.match(html, /Right dancer/);
+  assert.match(html, /disabled="">Use this dancer/);
 });

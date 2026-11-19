@@ -14,11 +14,12 @@ type Props = {
   onCritiquesDeleted?: () => void;
   onCompare?: (video: LibraryVideo, file: File) => Promise<void>;
   onUpload?: (file: File, groupId: string) => void;
+  onReview?: (video: LibraryVideo) => Promise<void>;
   children?: ReactNode;
   pendingReview?: { videoId: string; content: ReactNode } | null;
 };
 
-export function VideoLibrary({ refreshKey, busy = false, focusVideoId, onCritiquesDeleted, onCompare, onUpload, children, pendingReview }: Props) {
+export function VideoLibrary({ refreshKey, busy = false, focusVideoId, onCritiquesDeleted, onCompare, onUpload, onReview, children, pendingReview }: Props) {
   const [videos, setVideos] = useState<LibraryVideo[]>([]);
   const [groups, setGroups] = useState<VideoGroup[]>([]);
   const [loading, setLoading] = useState(true);
@@ -151,6 +152,7 @@ export function VideoLibrary({ refreshKey, busy = false, focusVideoId, onCritiqu
 
   function renderVideo(video: LibraryVideo) {
     return <li key={video.id}>
+      {onReview && video.available && <button className="text-button" type="button" disabled={busy || updating !== null} onClick={() => { setUpdating(video.id); void onReview(video).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "The dancer review could not start.")).finally(() => setUpdating(null)); }}>Choose dancer</button>}
       <div className="video-library-row"><div><strong>{video.filename}</strong><p>Upload date: <time dateTime={video.createdAt}>{new Date(video.createdAt).toLocaleString()}</time>{video.byteSize > 0 && <> · {(video.byteSize / (1024 * 1024)).toFixed(1)} MB</>}</p>{!video.available && <p>Original file unavailable. Upload this video again to restore playback.</p>}</div>
         <div className="video-library-actions"><button className="toggle-button" type="button" disabled={deletingId === video.id} aria-expanded={expandedVideoIds.has(video.id)} onClick={() => { setError(""); setExpandedVideoIds((current) => { const next = new Set(current); if (next.has(video.id)) next.delete(video.id); else next.add(video.id); return next; }); }}>{expandedVideoIds.has(video.id) ? "Close review" : "Video & critiques"}</button>
           <button className="video-delete-button" type="button" disabled={busy || loading || deletingId !== null || !video.canDelete} title={video.canDelete ? "Delete " + video.filename : "Only the uploader can delete this session video"} aria-label={"Delete " + video.filename} aria-busy={deletingId === video.id} onClick={() => openDeleteDialog(video)}>

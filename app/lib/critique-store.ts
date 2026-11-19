@@ -22,6 +22,8 @@ export type CritiqueRecord = {
   critique: DanceCritique;
   earlierSongStart?: number;
   newerSongStart?: number;
+  earlierSubjectKey?: string | null;
+  newerSubjectKey?: string | null;
 };
 
 export type SavedVideoCritique = {

@@ -5,6 +5,7 @@ import { findDuplicatePersonalVideo, findLibraryVideo, listLibraryVideos, listVi
 import { isUploadedVideo, readVideoUpload, VideoUploadError } from "../../lib/video-upload";
 import type { VideoUpload } from "../../lib/video-upload";
 import { saveLocalVideo } from "../../lib/video-storage";
+import { validateUploadedVideo } from "../../lib/video-validation";
 
 export const runtime = "nodejs";
 
@@ -39,6 +40,7 @@ export async function POST(request: Request) {
     }
     const duplicate = await findDuplicatePersonalVideo(user.id, video.sha256);
     if (duplicate) return NextResponse.json(duplicate);
+    await validateUploadedVideo(video);
     const objectKey = await saveLocalVideo({ companyId: null, studentId: user.id, sessionId: "replai", hash: video.sha256, filename: video.name, filePath: video.path, byteSize: video.size });
     const saved = await savePersonalVideo({ userId: user.id, filename: video.name, contentType: video.type, byteSize: video.size, hash: video.sha256, objectKey, groupId, earlierVideoId });
     return NextResponse.json(saved, { status: saved.alreadyExists ? 200 : 201 });

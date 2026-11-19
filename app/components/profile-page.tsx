@@ -4,10 +4,12 @@ import { FormEvent, useEffect, useState } from "react";
 import { ConnectionPanel } from "./connection-panel";
 import { TeacherStudentsPanel } from "./teacher-students-panel";
 import { CompanyAssociationPanel } from "./company-association-panel";
+import { ProPreview } from "./pro-preview";
+import type { ProTrial } from "../lib/pro-trial-types";
 
 type StudentCompany = { id: string; name: string; type: "studio" | "private_company" | "other" };
 type TeacherCompany = StudentCompany & { isDefault?: boolean };
-type Profile = { firstName: string; lastName: string; organizationName: string; birthYear: number | null; email?: string; roles?: string[]; companies?: StudentCompany[] };
+type Profile = { firstName: string; lastName: string; organizationName: string; birthYear: number | null; email?: string; roles?: string[]; companies?: StudentCompany[]; proTrial?: ProTrial | null };
 type CompanyType = "studio" | "private_company" | "other";
 type TeacherOrganization = { id: string; name: string; type: CompanyType };
 const emptyProfile: Profile = { firstName: "", lastName: "", organizationName: "", birthYear: null };
@@ -90,7 +92,7 @@ export function ProfilePage({ required = false, onComplete, teacherCompanies = [
   return <section className="workspace profile-workspace" id="profile">
     <div className="profile-heading"><div className="eyebrow muted">PROFILE</div><h1>{required ? "Complete your profile." : "Your details."}</h1><p className={required ? "profile-required-message" : undefined} role={required ? "alert" : undefined}>{required ? "First and last name are required before you can continue." : "Keep your account information up to date."}</p></div>
     <form className="profile-form" onSubmit={save}>
-      <div className="account-details profile-wide"><div><span>Email address</span><strong>{profile.email || "Loading..."}</strong></div><div><span>Assigned roles</span><p>{profile.roles?.length ? profile.roles.map((role) => <b key={role}>{role}</b>) : "No roles assigned"}</p></div></div>
+      <div className="account-details account-details-with-pro profile-wide"><div><span>Email address</span><strong>{profile.email || "Loading..."}</strong></div><div><span>Assigned roles</span><p>{profile.roles?.length ? profile.roles.map((role) => <b key={role}>{role}</b>) : "No roles assigned"}</p></div><ProPreview trial={profile.proTrial} onStarted={refreshProfile} /></div>
       <label>First Name<input value={profile.firstName} onChange={(event) => setProfile({ ...profile, firstName: event.target.value })} maxLength={100} required/></label>
       <label>Last Name<input value={profile.lastName} onChange={(event) => setProfile({ ...profile, lastName: event.target.value })} maxLength={100} required/></label>
       <label>Birth year<input type="number" inputMode="numeric" min="1900" max={new Date().getFullYear()} value={profile.birthYear ?? ""} onChange={(event) => setProfile({ ...profile, birthYear: event.target.value ? Number(event.target.value) : null })}/></label>

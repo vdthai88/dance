@@ -20,6 +20,7 @@ export function CritiqueCard({ critique, currentTime, onSeek, title, videoName }
   return <aside className="critique-card">
     <div className="report-top"><div><div className="eyebrow muted">{title || "AI VIDEO CRITIQUE"}</div><h3>Notes for your<br/><em>next practice.</em></h3></div><span className="sample-tag">AI FEEDBACK</span></div>
     {videoName && <p className="critique-video-name">Feedback for <strong>{videoName}</strong></p>}
+    {critique.subject && <p className="critique-video-name"><strong>Dancer focus:</strong> {critique.subject.description}</p>}
     <p className="critique-summary">{critique.comparison || critique.summary}</p>
     {legacyProgress && <p className="progress-legacy-notice">This saved comparison predates progress labels. Its notes have not been classified as improved, ongoing, or new.</p>}
     <div className="moments-heading"><h4>Moments to review</h4><span>{critique.observations.length} NOTES</span></div>

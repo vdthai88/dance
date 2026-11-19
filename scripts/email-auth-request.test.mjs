@@ -4,7 +4,15 @@ import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { betterAuth } from 'better-auth';
 import { getMigrations } from 'better-auth/db/migration';
-import { callEmailAuth } from '../app/lib/email-auth-request.ts';
+import { callEmailAuth, isValidEmailAddress } from '../app/lib/email-auth-request.ts';
+import { emailVerificationOptions } from '../app/lib/auth-email.ts';
+
+test('email address validation accepts aliases and rejects malformed addresses', () => {
+  assert.ok(isValidEmailAddress('dancer+practice@example.com'));
+  for (const email of ['two@@example.com', 'a..b@example.com', 'a@-example.com', 'a@localhost', 'a b@example.com']) {
+    assert.equal(isValidEmailAddress(email), false, email);
+  }
+});
 
 test('email signup and login work behind a public HTTPS proxy without self-fetching', async () => {
   const database = new DatabaseSync(':memory:');
@@ -46,4 +54,58 @@ test('email signup and login work behind a public HTTPS proxy without self-fetch
     if (previousUrl === undefined) delete process.env.BETTER_AUTH_URL; else process.env.BETTER_AUTH_URL = previousUrl;
     database.close();
   }
+});
+
+test('email signup requires mailbox verification and valid credentials can resend the link', async (t) => {
+  const database = new DatabaseSync(':memory:');
+  t.after(() => database.close());
+  const origin = 'https://one-dance-staging.onrender.com';
+  const previous = { key: process.env.RESEND_API_KEY, from: process.env.AUTH_EMAIL_FROM };
+  process.env.RESEND_API_KEY = 'mock-key';
+  process.env.AUTH_EMAIL_FROM = 'One Dance <accounts@example.com>';
+  t.after(() => {
+    if (previous.key === undefined) delete process.env.RESEND_API_KEY; else process.env.RESEND_API_KEY = previous.key;
+    if (previous.from === undefined) delete process.env.AUTH_EMAIL_FROM; else process.env.AUTH_EMAIL_FROM = previous.from;
+  });
+  const deliveries = [];
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    assert.equal(url, 'https://api.resend.com/emails');
+    assert.equal(init.headers.Authorization, 'Bearer mock-key');
+    deliveries.push(JSON.parse(init.body));
+    return Response.json({ id: 'mock-email' });
+  });
+  const config = {
+    database,
+    baseURL: origin,
+    secret: randomBytes(32).toString('base64'),
+    emailAndPassword: { enabled: true, requireEmailVerification: true },
+    emailVerification: emailVerificationOptions,
+    rateLimit: { enabled: false },
+  };
+  await (await getMigrations(config)).runMigrations();
+  const auth = betterAuth(config);
+  const request = new Request(origin, { headers: { Origin: origin } });
+  const credentials = { email: 'practice@example.com', password: 'test-only-password' };
+  const signUp = () => callEmailAuth(auth.handler, request, '/api/auth/sign-up/email', { name: 'Practice', ...credentials });
+  const signIn = (body = credentials) => callEmailAuth(auth.handler, request, '/api/auth/sign-in/email', body);
+
+  const signup = await signUp();
+  assert.equal(signup.status, 200);
+  assert.equal((await signup.json()).token, null);
+  assert.equal(signup.headers.getSetCookie().length, 0);
+  assert.equal((await signUp()).status, 200);
+  assert.equal((await signIn({ ...credentials, password: 'wrong-password' })).status, 401);
+  assert.equal(deliveries.length, 1);
+  assert.equal((await (await signIn()).json()).code, 'EMAIL_NOT_VERIFIED');
+  assert.equal(deliveries.length, 2);
+  assert.deepEqual(deliveries[1].to, [credentials.email]);
+  const link = new URL(deliveries[1].text.split('\n\n')[1]);
+  assert.equal(link.origin, origin);
+  assert.equal(link.searchParams.get('callbackURL'), '/sign-in?verification=confirmed');
+  const verified = await auth.handler(new Request(link));
+  assert.equal(verified.status, 302);
+  assert.equal(verified.headers.get('location'), '/sign-in?verification=confirmed');
+  const login = await signIn();
+  assert.equal(login.status, 200);
+  assert.ok(login.headers.getSetCookie().some((cookie) => cookie.includes('session_token')));
 });

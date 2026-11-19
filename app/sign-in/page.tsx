@@ -7,19 +7,29 @@ const messages: Record<string, string> = {
   "invalid-credentials": "We could not sign you in with that email and password.",
   "invalid-request": "Enter a valid email address and password.",
   "rate-limited": "Too many attempts. Please wait a moment and try again.",
+  "verification-delivery": "We could not send a verification email. Try signing in again in a few minutes.",
+};
+
+const verificationMessages: Record<string, string> = {
+  resent: "Your email is not verified yet. We sent a new link. Check your inbox and spam folder.",
+  confirmed: "Your email address is verified. You can now sign in.",
 };
 
 function safeNext(value: string | undefined) {
-  return value?.startsWith("/") && !value.startsWith("//") ? value : "/";
+  return value?.startsWith("/") && !value.startsWith("//") && !/[\\\s]/.test(value) ? value : "/";
 }
 
-export default async function SignInPage({ searchParams }: { searchParams: Promise<{ error?: string; next?: string }> }) {
+export default async function SignInPage({ searchParams }: { searchParams: Promise<{ error?: string; next?: string; verification?: string }> }) {
   const params = await searchParams;
   const providers = enabledSocialProviders();
-  const error = params.error ? messages[params.error] || "We could not sign you in. Please try again." : "";
+  const error = params.error ? (params.verification === "confirmed"
+    ? "This verification link is invalid or expired. Sign in with your email and password to request a new link."
+    : messages[params.error] || "We could not sign you in. Please try again.") : "";
+  const notice = !error && params.verification ? verificationMessages[params.verification] : "";
   return <main className="auth-page"><section className="auth-card" aria-labelledby="sign-in-title">
     <p className="eyebrow">ONE</p><h1 id="sign-in-title">Welcome back</h1><p className="auth-copy">Sign in to access your dance practice space.</p>
     {error && <p className="auth-error" role="alert">{error}</p>}
+    {notice && <p className="auth-copy" role="status">{notice}</p>}
     <form action="/api/local-auth/sign-in" method="post" className="auth-form">
       <input type="hidden" name="next" value={safeNext(params.next)} />
       <label>Email<input name="email" type="email" autoComplete="email" maxLength={320} required /></label>

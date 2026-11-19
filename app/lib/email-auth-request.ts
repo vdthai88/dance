@@ -1,5 +1,12 @@
 type EmailAuthPath = "/api/auth/sign-in/email" | "/api/auth/sign-up/email";
 
+export function isValidEmailAddress(email: string) {
+  const [local, domain, extra] = email.split("@");
+  return email.length <= 254 && local.length <= 64 && extra === undefined &&
+    /^[a-z0-9!#$%&'*+/=?^`{|}~_-]+(?:\.[a-z0-9!#$%&'*+/=?^`{|}~_-]+)*$/i.test(local) &&
+    /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(domain ?? "");
+}
+
 /** Invoke auth in-process: Render's public HTTPS origin terminates at its proxy,
  * while the Next.js listener uses HTTP. A self-fetch can mix those protocols. */
 export function callEmailAuth(

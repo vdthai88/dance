@@ -10,8 +10,8 @@ const pool = new pg.Pool({ connectionString, ssl: process.env.POSTGRES_SSL === "
 try {
   const { rows } = await pool.query(`SELECT table_name FROM information_schema.tables
     WHERE table_schema = 'public' AND table_name IN
-    ('organizations', 'company_memberships', 'students', 'practice_sessions', 'videos', 'critiques', 'user_critique_deletions', 'video_library_groups', 'video_library_group_items', 'app_migrations')`);
-  const expected = ['app_migrations', 'company_memberships', 'organizations', 'practice_sessions', 'students', 'videos', 'critiques', 'user_critique_deletions', 'video_library_groups', 'video_library_group_items'];
+    ('organizations', 'company_memberships', 'students', 'practice_sessions', 'videos', 'critiques', 'user_critique_deletions', 'video_library_groups', 'video_library_group_items', 'user_pro_trials', 'video_dancer_selections', 'app_migrations')`);
+  const expected = ['app_migrations', 'company_memberships', 'organizations', 'practice_sessions', 'students', 'videos', 'critiques', 'user_critique_deletions', 'video_library_groups', 'video_library_group_items', 'user_pro_trials', 'video_dancer_selections'];
   const missing = expected.filter((name) => !rows.some((row) => row.table_name === name));
   if (missing.length) throw new Error(`Missing PostgreSQL tables: ${missing.join(', ')}`);
   const ownership = await pool.query(`SELECT 1 FROM information_schema.columns

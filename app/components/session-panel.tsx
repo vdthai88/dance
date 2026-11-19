@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { DanceCritique, TeacherFeedback } from "../lib/gemini-critique";
 import { ConnectionPanel } from "./connection-panel";
+import { checkVideoPlayback } from "../lib/video-playback-check";
 
 type Role = "student" | "teacher";
 type Student = { id: string; name: string; organizationId: string | null; organizationName: string | null; createdAt: string };
@@ -279,6 +280,7 @@ export function SessionPanel({ role, onRoleChange, onSessionChange, companyId }:
     setIsAttachingVideo(true);
     setError("");
     try {
+      await checkVideoPlayback(video);
       const form = new FormData();
       form.set("video", video, video.name);
       const response = await fetch(`/api/sessions/${encodeURIComponent(selectedSessionId)}/videos`, { method: "POST", body: form });

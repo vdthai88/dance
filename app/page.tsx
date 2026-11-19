@@ -5,6 +5,7 @@ import type { ChangeEvent, DragEvent } from "react";
 import { alignClipsByAudio } from "./lib/clip-alignment";
 import { isDanceCritique } from "./lib/gemini-critique";
 import { readApiJson } from "./lib/api-response";
+import { checkVideoPlayback } from "./lib/video-playback-check";
 import { AccountMenu } from "./components/account-menu";
 import { TeacherFeedbackPanel } from "./components/teacher-feedback-panel";
 import { SessionPanel } from "./components/session-panel";
@@ -12,6 +13,9 @@ import { ProfilePage } from "./components/profile-page";
 import { VideoLibrary } from "./components/video-library";
 import { ReplaiName } from "./components/replai-name";
 import type { LibraryUploadResult, LibraryVideo } from "./lib/video-library-types";
+import { DancerSelectionPanel } from "./components/dancer-selection-panel";
+import { isDancerDetection } from "./lib/dancer-selection";
+import type { DancerChoiceRequest } from "./lib/dancer-selection";
 
 function formatPreciseTime(seconds: number) {
   const safe = Math.max(0, seconds);
@@ -52,6 +56,8 @@ export default function Home() {
   const [autoCritiquePending, setAutoCritiquePending] = useState(false);
   const [focusedLibraryVideoId, setFocusedLibraryVideoId] = useState<string | null>(null);
   const [activeLibraryVideoId, setActiveLibraryVideoId] = useState<string | null>(null);
+  const [dancerChoices, setDancerChoices] = useState<Array<DancerChoiceRequest & { videoId: string; filename: string }>>([]);
+  const [forceDancerChoice, setForceDancerChoice] = useState(false);
   const savedVideoIds = useRef(new WeakMap<File, string>());
   const critiqueRequestId = useRef(0);
   const critiqueRequest = useRef<AbortController | null>(null);
@@ -152,6 +158,8 @@ export default function Home() {
     setSavingVideos((current) => current + 1);
     setVideoSaveError("");
     try {
+      await checkVideoPlayback(file);
+      if (selectionId !== critiqueRequestId.current) return;
       const form = new FormData();
       form.set("video", file, file.name);
       if (earlierVideoId) form.set("earlierVideoId", earlierVideoId);
@@ -174,6 +182,7 @@ export default function Home() {
   }
 
   function cancelCurrentCritique() {
+    setDancerChoices([]); setForceDancerChoice(false);
     setActiveLibraryVideoId(null);
     critiqueRequestId.current += 1;
     critiqueRequest.current?.abort();
@@ -255,8 +264,24 @@ export default function Home() {
     event.preventDefault(); setDragging(false); chooseFile(event.dataTransfer.files[0]);
   }
 
+  async function reviewLibraryVideo(video: LibraryVideo) {
+    cancelCurrentCritique();
+    const selectionId = critiqueRequestId.current;
+    const response = await fetch(`/api/replai-videos/${encodeURIComponent(video.id)}/content`, { cache: "no-store" });
+    if (!response.ok) throw new Error("This saved video could not be opened.");
+    const blob = await response.blob();
+    if (selectionId !== critiqueRequestId.current) return;
+    const file = new File([blob], video.filename, { type: video.contentType || blob.type || "video/mp4" });
+    savedVideoIds.current.set(file, video.id);
+    setVideoFile(file); setComparisonFile(null); setForceDancerChoice(true);
+    setActiveLibraryVideoId(video.id); setFocusedLibraryVideoId(video.id);
+    setLibraryRefreshKey((current) => current + 1);
+    setError(""); setVideoSaveError(""); setUploadNotice(""); setAutoCritiquePending(true);
+  }
+
   const requestAiCritique = useCallback(async () => {
     if (!videoFile) return;
+    if (dancerChoices.length) return;
     if (savingVideos > 0) return;
     if (comparisonFile && (!alignmentSource || isAutoAligning)) {
       setError("Confirm the song start times below before sending this comparison to AI.");
@@ -275,6 +300,7 @@ export default function Home() {
     try {
       const form = new FormData();
       form.set("video", videoFile, videoFile.name);
+      if (forceDancerChoice) form.set("chooseDancer", "1");
       if (comparisonFile) form.set("comparisonVideo", comparisonFile, comparisonFile.name);
       if (comparisonFile) {
         form.set("earlierSongStart", String(earlierSongStart));
@@ -283,6 +309,19 @@ export default function Home() {
       }
       const response = await fetch("/api/dance-critique", { method: "POST", body: form, signal: controller.signal });
       const result = await readApiJson(response, "Video critique");
+      if (requestId !== critiqueRequestId.current) return;
+      if (response.status === 202) {
+        const data = result as { needsDancerSelection?: boolean; choices?: DancerChoiceRequest[] };
+        if (!data.needsDancerSelection || !Array.isArray(data.choices) || !data.choices.length || !data.choices.every((choice) => ["earlier", "newer"].includes(choice.take) && isDancerDetection(choice.detection))) throw new Error("AI returned an invalid dancer selection. Please retry.");
+        const choices = data.choices.map((choice) => {
+          const file = choice.take === "newer" ? comparisonFile : videoFile;
+          const videoId = file ? savedVideoIds.current.get(file) : null;
+          if (!file || !videoId) throw new Error("Save this video before choosing its dancer.");
+          return { ...choice, videoId, filename: file.name };
+        });
+        setDancerChoices(choices); setForceDancerChoice(false); setAutoCritiquePending(false);
+        return;
+      }
       if (!isDanceCritique(result)) throw new Error("The server returned an invalid critique. Check Render Logs for this request, then retry.");
       if (requestId !== critiqueRequestId.current) return;
       setFocusedLibraryVideoId(savedVideoIds.current.get(comparisonFile ?? videoFile) ?? null);
@@ -302,17 +341,18 @@ export default function Home() {
     } finally {
       if (requestId === critiqueRequestId.current) setIsCritiquing(false);
     }
-  }, [videoFile, comparisonFile, earlierSongStart, newerSongStart, savingVideos, alignmentSource, isAutoAligning]);
+  }, [videoFile, comparisonFile, earlierSongStart, newerSongStart, savingVideos, alignmentSource, isAutoAligning, dancerChoices, forceDancerChoice]);
 
   useEffect(() => {
     if (!autoCritiquePending || !videoFile || savingVideos > 0 || videoSaveError || isAutoAligning || isCritiquing) return;
+    if (dancerChoices.length) return;
     if (comparisonFile && !alignmentSource) return;
     const timer = window.setTimeout(() => {
       setAutoCritiquePending(false);
       void requestAiCritique();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [autoCritiquePending, videoFile, savingVideos, videoSaveError, isAutoAligning, isCritiquing, requestAiCritique, comparisonFile, alignmentSource]);
+  }, [autoCritiquePending, videoFile, savingVideos, videoSaveError, isAutoAligning, isCritiquing, requestAiCritique, comparisonFile, alignmentSource, dancerChoices]);
 
   useEffect(() => () => { critiqueRequest.current?.abort(); }, []);
 
@@ -367,7 +407,8 @@ export default function Home() {
   }
 
   const pendingReviewContent = activeLibraryVideoId && videoFile ? <div className="insights-column">
-    {comparisonFile && <div className="comparison-alignment-controls">
+    {dancerChoices.map((choice) => <DancerSelectionPanel key={choice.take + choice.videoId} videoId={choice.videoId} title={(comparisonFile ? (choice.take === "earlier" ? "Earlier: " : "Newer: ") : "") + choice.filename} detection={choice.detection} onChosen={() => { setDancerChoices((current) => current.filter((item) => item.take !== choice.take)); setAutoCritiquePending(true); }} />)}
+    {!dancerChoices.length && comparisonFile && <div className="comparison-alignment-controls">
                 <p className={alignmentFailed ? "error-message" : "critique-cache-notice"} role="status">{isAutoAligning ? `Matching audio: ${Math.round(autoAlignProgress * 100)}%` : alignmentFailed ? `Comparison paused. ${alignmentMessage}` : alignmentMessage}</p>
                 <p>Song starts in seconds. If audio cannot be read here, check the clips in an external browser and enter their start times.</p>
                 <div className="comparison-start-fields">
@@ -377,7 +418,7 @@ export default function Home() {
                 <button className="toggle-button" type="button" disabled={isAutoAligning || isCritiquing || savingVideos > 0 || !Number.isFinite(earlierSongStart) || earlierSongStart < 0 || !Number.isFinite(newerSongStart) || newerSongStart < 0} onClick={() => { setAlignmentSource("manual"); setAlignmentFailed(false); setAutoCritiquePending(true); setError(""); }}>Use these start times and compare</button>
                 <button className="text-button" type="button" disabled={isAutoAligning || isCritiquing || savingVideos > 0} onClick={() => { setAutoCritiquePending(true); void autoAlignMusic(); }}>Retry audio alignment</button>
               </div>}
-    <aside className="aside-card ai-feedback-status" aria-busy={aiFeedbackBusy}>
+    {!dancerChoices.length && <aside className="aside-card ai-feedback-status" aria-busy={aiFeedbackBusy}>
                 <div className="eyebrow muted">AI FEEDBACK</div>
                 <div role="status" aria-live="polite">
                   <h3>{isCritiquing ? "AI is reviewing your video" : savingVideos > 0 ? "Uploading your video" : aiFeedbackBusy ? "Preparing your AI feedback" : comparisonFile && !alignmentSource ? "Confirm song starts" : "Your next take starts here."}</h3>
@@ -385,7 +426,7 @@ export default function Home() {
                   <p>{isCritiquing ? "Analyzing your video. Your feedback will appear here when it is ready." : savingVideos > 0 ? "Your AI critique will start automatically once the upload finishes." : isAutoAligning ? "Matching the audio before comparing your videos." : aiFeedbackBusy ? "Checking for saved feedback and preparing your critique." : comparisonFile && !alignmentSource ? "The comparison is paused. Enter and confirm both song starts beside the video before continuing." : videoSaveError ? "Your video could not be saved. Choose it again to retry the upload." : "You can retry your AI feedback below."}</p>
                 </div>
                 {!aiFeedbackBusy && (!comparisonFile || alignmentSource) && <button className="button button-dark" type="button" onClick={() => { setAutoCritiquePending(false); void requestAiCritique(); }}>{comparisonFile ? "Retry AI comparison" : "Retry AI critique"}</button>}
-              </aside>
+              </aside>}
     {error && <p className="error-message" role="alert">{error}</p>}
   </div> : null;
 
@@ -426,8 +467,8 @@ export default function Home() {
 
         <section className="replai-intro"><div className="eyebrow muted">A PRACTICE, NOT A PERFORMANCE</div><h1>Small steps add up.</h1><div className="replai-steps"><article><span>01</span><h2>Choose your take</h2><p>Upload a solo practice video from your device.</p></article><article><span>02</span><h2>Notice the details</h2><p>Explore a sample report with moments and movement cues.</p></article><article><span>03</span><h2>Try it your way</h2><p>Keep what resonates. Your practice belongs to you.</p></article></div></section>
 
-        <VideoLibrary refreshKey={libraryRefreshKey} focusVideoId={focusedLibraryVideoId} onCompare={startLibraryComparison} onUpload={chooseFile} pendingReview={activeLibraryVideoId && pendingReviewContent ? { videoId: activeLibraryVideoId, content: pendingReviewContent } : null} busy={isCritiquing || savingVideos > 0 || (autoCritiquePending && !videoSaveError)}>
-        <p className="video-save-status" role="status">{savingVideos > 0 ? `Saving ${savingVideos === 1 ? "your video" : "your videos"} to your library...` : "Uploaded videos are saved privately and automatically sent for AI feedback."}</p>
+        <VideoLibrary refreshKey={libraryRefreshKey} focusVideoId={focusedLibraryVideoId} onCompare={startLibraryComparison} onUpload={chooseFile} onReview={reviewLibraryVideo} pendingReview={activeLibraryVideoId && pendingReviewContent ? { videoId: activeLibraryVideoId, content: pendingReviewContent } : null} busy={isCritiquing || savingVideos > 0 || (autoCritiquePending && !videoSaveError)}>
+        <p className="video-save-status" role="status">{savingVideos > 0 ? `Checking playback and saving ${savingVideos === 1 ? "your video" : "your videos"} to your library...` : "Uploaded videos are saved privately and automatically sent for AI feedback."}</p>
         {videoSaveError && <p className="error-message" role="alert">{videoSaveError}</p>}
         {uploadNotice && <p className="video-library-message" role="status">{uploadNotice}</p>}
           <div className={`upload-card ${dragging ? "dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={onDrop}>

@@ -85,6 +85,10 @@ The bucket remains private. The app checks session access before it retrieves a 
 
 ### Video processing on small instances
 
+New Replai and coaching uploads must pass validation before permanent storage or database attachment. The browser checks decoded frames at the beginning, middle and end. The server then uses bundled FFmpeg to decode the full video and its audio tracks from temporary disk, rejecting damaged, truncated, audio-only or undecodable files. MP4/MOV and WebM containers are supported. Rejected uploads leave no new library video, session attachment or automatic group; temporary upload files are removed. Existing saved files are not retroactively deleted, and an AI outage does not delete a valid upload.
+
+Validation runs one decoder at a time per server process, with one decoder thread, bounded output and a 60-second decode limit. Up to three requests can wait; additional requests receive a retry message. This adds upload processing time, particularly for high-resolution files. A file that exceeds the validation window is rejected with a request for a shorter/lower-resolution clip. `ffmpeg-static` installs the platform-specific executable during dependency installation; optional `FFMPEG_PATH` overrides it. If the validator is unavailable, uploads fail without being saved.
+
 ReplAI lists the signed-in user's latest 100 saved personal uploads and videos attached to their own student sessions. Choosing an earlier or newer take saves a private library copy automatically, then queues AI feedback. Failed uploads do not trigger automatic analysis, and failed AI requests are retried only when the user chooses to retry. Replacing or removing a selected take prevents an older response from appearing on the new selection. The list refreshes after uploads and offers streamed playback. Previously previewed ReplAI clips were not stored and must be uploaded again. Apply migration `0004_personal_replai_videos.sql` with `npm run db:migrate` before using this feature; PostgreSQL stores the metadata and the configured local/R2 driver stores the video bytes.
 
 The trash-can action offers **Delete video only**, **Delete video and critiques**, and **Cancel**. Deletion removes the owned upload from storage and marks its metadata as deleted. The second option also removes the account's single-video critiques and comparisons, including saved-critique lookups after reuploading. Requesting a new critique restores only the requester's access to the new result. Apply migration `0005_user_critique_deletions.sql` before using these options. Students can view teacher-uploaded session videos, but only their own uploads have an enabled delete action. Ownership is checked again on the server; a storage failure leaves the entry available for retry.
@@ -114,3 +118,24 @@ The app downloads MediaPipe's WebAssembly runtime from jsDelivr the first time a
 ## Later backend work
 
 This remains a local-development prototype. Sign-in is implemented, but student/teacher/company data is not yet owned by individual account IDs; that is the next authorization step before deploying for multiple people. A hosted release will also need per-user data access enforcement on every API route, upload limits, abuse protection, consent and retention controls, and an asynchronous worker for long video requests. SHA-256 matching only recognizes byte-for-byte identical files; re-encoded or edited copies will be treated as new videos. Configure `DANCE_DATABASE_PATH` to choose a different SQLite file location.
+### Email verification
+
+For local development, set `AUTH_EMAIL_DEV_LOG=true` in `.env.local` and restart `npm run dev`. Create a test account and open the verification link printed in the terminal, then sign in. This mode is available only under Next.js development.
+
+For staging, [verify a sending domain in Resend](https://resend.com/docs/dashboard/domains/introduction) and create a sending API key. Add `RESEND_API_KEY` and `AUTH_EMAIL_FROM` (for example, `One Dance <accounts@updates.example.com>`) in Render, with `BETTER_AUTH_URL` set to the public app URL. Deploy the app, create a new test account, and confirm the email arrives and the link opens the staging sign-in page. Keep the key in Render or your local environment file.
+
+When a sender is configured, Better Auth requires email verification for email/password sign-in. Links expire after one hour. Signing in with valid credentials before verification sends a fresh link. This also applies to existing unverified password accounts at their next sign-in. Social sign-in continues to use the provider's existing flow. With no sender variables and local logging disabled, verification is inactive. The existing auth schema supports this flow.
+
+### Dancer selection before AI feedback
+
+Before a new critique, AI checks who is visible in each video. One clearly identified dancer continues automatically. Multiple dancers or an uncertain result pause the critique and show a reference frame, candidate descriptions, and an editable dancer description. Choose the person and press **Use this dancer** to resume. Mirror reflections should not count as additional people. This is a visual cue for AI, not guaranteed frame-by-frame tracking; the critique must acknowledge uncertainty when the dancer cannot be followed reliably.
+
+Selections are saved per account and video fingerprint. Each video in a comparison has its own selection, and saved critiques are matched to those selections so changing the dancer does not reuse another person's feedback. Existing records remain stored. Use **Choose dancer** beside a saved video to select or change its subject without uploading another library copy. The preliminary check adds an AI request when no detection is saved; a paused request uploads the video to the provider again after confirmation, while retaining the private library copy.
+
+Apply `0009_video_dancer_selection.sql` before deploying this feature. Run `npm run db:migrate` and `npm run db:validate` against staging separately; migrating the local database does not migrate staging.
+
+### Pro trial enrollment
+
+On Profile, **Try Pro now!** starts a trial and adds the signed-in account's teacher role while preserving its student role. Assigned roles refresh immediately. Teacher role assignment time is already stored in `user_roles.created_at`; explicit Pro enrollment is stored in `user_pro_trials.started_at`, with an optional `ends_at`. Repeated requests, role removal/reassignment, and expired trials never restart the enrollment clock. Existing teachers retain their original role-assignment date.
+
+Apply `0008_pro_trials.sql` before deploying this feature. Set optional server variable `PRO_TRIAL_DAYS` to a whole number from 1 to 365 for newly started trial end dates; blank records the start only. Trial expiration enforcement and billing are not implemented yet. The Pro popup displays the recorded start and configured end date. Local development migration is applied separately from staging.

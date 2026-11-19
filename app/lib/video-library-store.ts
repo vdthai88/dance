@@ -50,6 +50,8 @@ export async function getLibraryVideoDetails(userId: string, id: string): Promis
   if (!found) return null;
   const pool = getPostgresPool();
   const { rows } = await pool.query(`SELECT c.* FROM critiques c WHERE owner_user_id = $1
+    AND (CASE WHEN newer_sha256 IS NULL THEN earlier_subject_key ELSE newer_subject_key END) IS NOT DISTINCT FROM
+      (SELECT selected_key FROM video_dancer_selections WHERE user_id = $1 AND video_sha256 = $2)
     AND ((earlier_sha256 = $2 AND newer_sha256 IS NULL) OR newer_sha256 = $2) AND NOT EXISTS
       (SELECT 1 FROM user_critique_deletions d WHERE d.user_id = $1 AND d.cache_key = c.cache_key)
     ORDER BY c.created_at DESC LIMIT 30`, [userId, found.hash]);

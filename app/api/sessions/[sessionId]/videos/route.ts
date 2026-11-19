@@ -6,6 +6,7 @@ import { usesPostgres } from "../../../../lib/database-driver";
 import { getPgSessionVideoStorageContext, pgCanAccessSession, savePgSessionVideo } from "../../../../lib/postgres-session-store";
 import { attachSessionVideo, canAccessSession } from "../../../../lib/session-store";
 import { deleteLocalVideo, saveLocalVideo } from "../../../../lib/video-storage";
+import { validateUploadedVideo } from "../../../../lib/video-validation";
 
 export const runtime = "nodejs";
 
@@ -22,6 +23,7 @@ export async function POST(request: Request, context: { params: Promise<{ sessio
     const video = form.get("video");
     if (!isUploadedVideo(video) || video.size === 0) return NextResponse.json({ error: "Choose a video to attach." }, { status: 400 });
     if (!video.type.startsWith("video/")) return NextResponse.json({ error: "Choose a video file." }, { status: 415 });
+    await validateUploadedVideo(video);
     const hash = video.sha256;
     let attached: boolean;
     if (usesPostgres()) {

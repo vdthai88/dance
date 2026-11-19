@@ -57,6 +57,7 @@ test('personal and session video listing enforces account ownership and deduplic
   const { getPostgresPool } = await import('../db/postgres.ts');
   const { listLibraryVideos, findLibraryVideo, findDuplicatePersonalVideo, savePersonalVideo, deleteLibraryVideo, getLibraryVideoDetails, listVideoGroups, createVideoGroup, updateVideoGroup, moveLibraryVideo } = await import('../app/lib/video-library-store.ts');
   const { attachPgSessionCritique, findPgCritique, findPgCritiqueForVideo, savePgCritique } = await import('../app/lib/postgres-critique-store.ts');
+  const { getPgDancerSelection, savePgDancerDetection, selectPgDancer } = await import('../app/lib/postgres-dancer-store.ts');
   const schema = `video_library_test_${randomUUID().replaceAll('-', '')}`;
   // A single checked-out connection is used for setup and store calls so the
   // search path cannot leak to the real application schema.
@@ -297,6 +298,29 @@ test('personal and session video listing enforces account ownership and deduplic
     const orderedGroups = await listVideoGroups('student-a');
     assert.equal(orderedGroups[0].id, newestGroup.id);
     assert.equal(orderedGroups.at(-1).id, olderGroup.id);
+    const detection = { status: 'multiple', confidence: 'high', referenceSeconds: 2, candidates: [{ description: 'Blue shirt on left' }, { description: 'Black clothing on right' }], explanation: 'Two people, excluding mirror reflections.' };
+    await savePgDancerDetection('student-a', input.hash, detection);
+    assert.deepEqual((await getPgDancerSelection('student-a', input.hash)).detection, detection);
+    assert.equal((await getPgDancerSelection('student-b', input.hash)).detection, null);
+    const firstTarget = await selectPgDancer('student-a', input.hash, { description: detection.candidates[0].description, referenceSeconds: 2 });
+    const firstRecord = { ...baseline, key: makeCritiqueKey(input.hash, null, 'student-a', { earlier: firstTarget.key }), earlierSubjectKey: firstTarget.key,
+      critique: { ...feedback, subject: firstTarget.target, summary: 'Feedback for left dancer.' } };
+    await savePgCritique(firstRecord, 'student-a');
+    assert.equal((await getLibraryVideoDetails('student-a', saved.id)).reviews[0].key, firstRecord.key);
+    assert.equal((await findPgCritique(firstRecord.key, 'student-a')).earlierSubjectKey, firstTarget.key);
+    const secondTarget = await selectPgDancer('student-a', input.hash, { description: detection.candidates[1].description, referenceSeconds: 2 });
+    await selectPgDancer('student-a', input.hash, firstTarget.target, true);
+    assert.equal((await getPgDancerSelection('student-a', input.hash)).key, secondTarget.key, 'Automatic detection cannot replace a manually selected target');
+    assert.notEqual(secondTarget.key, firstTarget.key);
+    assert.equal(await findPgCritiqueForVideo(input.hash, 'student-a'), null, 'A new dancer cannot inherit another dancer\'s baseline');
+    assert.equal((await getLibraryVideoDetails('student-a', saved.id)).reviews.length, 0);
+    const secondRecord = { ...firstRecord, key: makeCritiqueKey(input.hash, null, 'student-a', { earlier: secondTarget.key }), earlierSubjectKey: secondTarget.key,
+      critique: { ...feedback, subject: secondTarget.target, summary: 'Feedback for right dancer.' } };
+    await savePgCritique(secondRecord, 'student-a');
+    assert.equal((await getLibraryVideoDetails('student-a', saved.id)).reviews[0].critique.summary, 'Feedback for right dancer.');
+    assert.equal((await findPgCritiqueForVideo(input.hash, 'student-a', firstTarget.key)).critique.summary, 'Feedback for left dancer.');
+    assert.equal((await getPgDancerSelection('student-b', input.hash)).target, null);
+    assert.ok(await findPgCritique(firstRecord.key, 'student-a'), 'Changing focus preserves prior feedback records');
   } finally {
     pool.query = originalQuery;
     pool.connect = originalConnect;
