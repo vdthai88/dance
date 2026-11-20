@@ -73,6 +73,8 @@
 .video-library-message{color:#526a47;font-size:12px}
 .video-library-actions{display:flex;align-items:center;gap:9px;flex-shrink:0}
 .video-delete-button{display:grid;place-items:center;width:36px;height:36px;padding:0;border:1px solid var(--line);border-radius:4px;background:#fff;color:#a34436;cursor:pointer}
+.video-review-button{display:grid;place-items:center;width:36px;height:36px;padding:0;border:1px solid var(--line);border-radius:4px;background:#fff;color:#7659d2;cursor:pointer}.video-review-button:hover:not(:disabled){background:#f4f0ff;border-color:#b9a9ed}.video-review-button:disabled{opacity:.4;cursor:not-allowed}
+.video-download-button{display:grid;place-items:center;width:36px;height:36px;padding:0;border:1px solid var(--line);border-radius:4px;background:#fff;color:#7659d2;text-decoration:none;cursor:pointer}.video-download-button:hover{background:#f4f0ff;border-color:#b9a9ed}
 .video-delete-button:hover:not(:disabled){background:#fff0ec;border-color:#d7aaa1}
 .video-delete-button:disabled{opacity:.4;cursor:not-allowed}
 .video-delete-button[aria-busy=true]{opacity:1;cursor:wait}

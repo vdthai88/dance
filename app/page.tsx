@@ -53,6 +53,7 @@ export default function Home() {
   const [savingVideos, setSavingVideos] = useState(0);
   const [videoSaveError, setVideoSaveError] = useState("");
   const [uploadNotice, setUploadNotice] = useState("");
+  const [uploadCheckMessage, setUploadCheckMessage] = useState("");
   const [autoCritiquePending, setAutoCritiquePending] = useState(false);
   const [focusedLibraryVideoId, setFocusedLibraryVideoId] = useState<string | null>(null);
   const [activeLibraryVideoId, setActiveLibraryVideoId] = useState<string | null>(null);
@@ -197,8 +198,8 @@ export default function Home() {
     cancelCurrentCritique();
     setAutoCritiquePending(false);
     setVideoFile(null); setComparisonFile(null);
-    setError("");
-    setUploadNotice(saved.existingGroupName
+    setError(""); setUploadNotice("");
+    setUploadCheckMessage(saved.existingGroupName
       ? `This video was previously uploaded to "${saved.existingGroupName}". It has not been moved.`
       : "This video was previously uploaded to your library. It has not been moved.");
   }
@@ -273,7 +274,7 @@ export default function Home() {
     if (selectionId !== critiqueRequestId.current) return;
     const file = new File([blob], video.filename, { type: video.contentType || blob.type || "video/mp4" });
     savedVideoIds.current.set(file, video.id);
-    setVideoFile(file); setComparisonFile(null); setForceDancerChoice(true);
+    setVideoFile(file); setComparisonFile(null); setForceDancerChoice(false);
     setActiveLibraryVideoId(video.id); setFocusedLibraryVideoId(video.id);
     setLibraryRefreshKey((current) => current + 1);
     setError(""); setVideoSaveError(""); setUploadNotice(""); setAutoCritiquePending(true);
@@ -395,10 +396,17 @@ export default function Home() {
     return () => window.clearTimeout(timeout);
   }, [videoFile, comparisonFile, autoAlignMusic]);
 
+  useEffect(() => {
+    if (!isCritiquing || !activeLibraryVideoId) return;
+    const timer = window.setTimeout(() => document.getElementById("ai-feedback-status")?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
+    return () => window.clearTimeout(timer);
+  }, [isCritiquing, activeLibraryVideoId]);
+
   const activeCompanies = profile === "teacher" ? teacherCompanies : studentCompanies;
   const activeCompanyId = profile === "teacher" ? activeTeacherCompanyId : activeStudentCompanyId;
   const activeCompany = activeCompanies.find((company) => company.id === activeCompanyId) ?? null;
   const aiFeedbackBusy = isCritiquing || savingVideos > 0 || isAutoAligning || (autoCritiquePending && !videoSaveError && (!comparisonFile || Boolean(alignmentSource)));
+  const uploadModalMessage = uploadCheckMessage || videoSaveError;
 
   function changeActiveCompany(companyId: string) {
     if (profile === "teacher") setActiveTeacherCompanyId(companyId);
@@ -418,7 +426,7 @@ export default function Home() {
                 <button className="toggle-button" type="button" disabled={isAutoAligning || isCritiquing || savingVideos > 0 || !Number.isFinite(earlierSongStart) || earlierSongStart < 0 || !Number.isFinite(newerSongStart) || newerSongStart < 0} onClick={() => { setAlignmentSource("manual"); setAlignmentFailed(false); setAutoCritiquePending(true); setError(""); }}>Use these start times and compare</button>
                 <button className="text-button" type="button" disabled={isAutoAligning || isCritiquing || savingVideos > 0} onClick={() => { setAutoCritiquePending(true); void autoAlignMusic(); }}>Retry audio alignment</button>
               </div>}
-    {!dancerChoices.length && <aside className="aside-card ai-feedback-status" aria-busy={aiFeedbackBusy}>
+    {!dancerChoices.length && <aside id="ai-feedback-status" className="aside-card ai-feedback-status" aria-busy={aiFeedbackBusy}>
                 <div className="eyebrow muted">AI FEEDBACK</div>
                 <div role="status" aria-live="polite">
                   <h3>{isCritiquing ? "AI is reviewing your video" : savingVideos > 0 ? "Uploading your video" : aiFeedbackBusy ? "Preparing your AI feedback" : comparisonFile && !alignmentSource ? "Confirm song starts" : "Your next take starts here."}</h3>
@@ -432,6 +440,20 @@ export default function Home() {
 
   return (
     <main className="shell app-shell">
+      {(savingVideos > 0 || uploadModalMessage) && <div className="upload-check-overlay" role="dialog" aria-modal="true" aria-labelledby="upload-check-title" aria-describedby="upload-check-description">
+        <div className="upload-check-modal">
+          {uploadModalMessage ? <>
+            <div className="upload-check-message-icon" aria-hidden="true">✓</div>
+            <h2 id="upload-check-title">Upload notice</h2>
+            <p id="upload-check-description">{uploadModalMessage}</p>
+            <button className="button button-dark upload-check-ok" type="button" onClick={() => { setUploadCheckMessage(""); setVideoSaveError(""); }}>OK</button>
+          </> : <>
+          <div className="upload-check-spinner" aria-hidden="true" />
+          <h2 id="upload-check-title">Checking your video</h2>
+          <p id="upload-check-description">We’re checking playback and saving your video securely. This may take a moment.</p>
+          </>}
+        </div>
+      </div>}
       <aside className="sidebar" aria-label="Main navigation">
         <a className="sidebar-logo" href="#top" aria-label="One home">O</a>
         <nav className="sidebar-nav">

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./upload-check.css";
 
 export const metadata: Metadata = {
   title: "One — Dance practice, with direction",

@@ -15,8 +15,10 @@ export async function GET(request: Request, context: { params: Promise<{ videoId
     const found = await findLibraryVideo(user.id, videoId);
     if (!found?.video.available || !found.objectKey) return NextResponse.json({ error: "This video is unavailable. Upload it again to restore playback." }, { status: 404 });
     const stored = await streamLocalVideo(found.objectKey, request.headers.get("range"));
+    const download = new URL(request.url).searchParams.get("download") === "1";
     return new NextResponse(stored.body, { status: stored.status, headers: {
       ...stored.headers, "Content-Type": found.video.contentType || "video/mp4", "Cache-Control": "private, no-store",
+      ...(download ? { "Content-Disposition": `attachment; filename="video"; filename*=UTF-8''${encodeURIComponent(found.video.filename)}` } : {}),
     } });
   } catch (error) {
     if (error instanceof VideoRangeError) return new NextResponse(null, { status: 416, headers: { "Content-Range": `bytes */${error.size}` } });
