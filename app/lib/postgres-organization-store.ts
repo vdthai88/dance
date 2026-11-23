@@ -7,8 +7,25 @@ const iso = (value: Date | string) => value instanceof Date ? value.toISOString(
 type CompanyType = TeacherOrganization["type"];
 
 export async function listPgCompanies(): Promise<TeacherOrganization[]> {
-  const { rows } = await getPostgresPool().query("SELECT id, display_name, organization_type FROM organizations ORDER BY display_name");
-  return rows.map((row) => ({ id: row.id as string, name: row.display_name as string, type: row.organization_type as CompanyType }));
+  const { rows } = await getPostgresPool().query("SELECT id, display_name, organization_type, address, phone_number FROM organizations ORDER BY display_name");
+  return rows.map((row) => ({ id: row.id as string, name: row.display_name as string, type: row.organization_type as CompanyType, address: row.address as string, phoneNumber: row.phone_number as string }));
+}
+
+export async function listPgOwnedCompanies(userId: string): Promise<TeacherOrganization[]> {
+  const { rows } = await getPostgresPool().query(`SELECT o.id, o.display_name, o.organization_type, o.address, o.phone_number
+    FROM company_memberships cm JOIN organizations o ON o.id = cm.company_id
+    WHERE cm.user_id = $1 AND cm.role = 'owner' ORDER BY o.display_name`, [userId]);
+  return rows.map((row) => ({ id: row.id as string, name: row.display_name as string, type: row.organization_type as CompanyType, address: row.address as string, phoneNumber: row.phone_number as string }));
+}
+
+export async function updatePgOwnedCompany(userId: string, companyId: string, input: { name: string; type: CompanyType; address: string; phoneNumber: string }): Promise<TeacherOrganization | "exists" | null> {
+  const pool = getPostgresPool();
+  if (!(await pool.query("SELECT 1 FROM company_memberships WHERE company_id=$1 AND user_id=$2 AND role='owner'", [companyId, userId])).rowCount) return null;
+  if ((await pool.query("SELECT 1 FROM organizations WHERE lower(display_name)=lower($1) AND id<>$2", [input.name.trim(), companyId])).rowCount) return "exists";
+  const { rows } = await pool.query(`UPDATE organizations SET display_name=$1, organization_type=$2, address=$3, phone_number=$4 WHERE id=$5
+    RETURNING id, display_name, organization_type, address, phone_number`, [input.name.trim(), input.type, input.address.trim(), input.phoneNumber.trim(), companyId]);
+  const row = rows[0];
+  return row ? { id: row.id as string, name: row.display_name as string, type: row.organization_type as CompanyType, address: row.address as string, phoneNumber: row.phone_number as string } : null;
 }
 
 export async function listPgCompanyMembers(userId: string): Promise<CompanyMember[]> {
@@ -31,21 +48,21 @@ async function ensurePgTeacherProfile(client: PoolClient, userId: string, compan
   return id;
 }
 
-export async function createPgCompanyForTeacher(userId: string, input: { name: string; type: CompanyType }): Promise<TeacherOrganization | "exists"> {
+export async function createPgCompanyForTeacher(userId: string, input: { name: string; type: CompanyType; address?: string; phoneNumber?: string }): Promise<TeacherOrganization | "exists"> {
   const client = await getPostgresPool().connect();
   try {
     const existing = await client.query("SELECT 1 FROM organizations WHERE lower(display_name) = lower($1)", [input.name.trim()]);
     if (existing.rowCount) return "exists";
     await client.query("BEGIN");
     const id = randomUUID();
-    await client.query("INSERT INTO organizations (id, display_name, organization_type) VALUES ($1,$2,$3)", [id, input.name.trim(), input.type]);
+    await client.query("INSERT INTO organizations (id, display_name, organization_type, address, phone_number) VALUES ($1,$2,$3,$4,$5)", [id, input.name.trim(), input.type, input.address?.trim() ?? "", input.phoneNumber?.trim() ?? ""]);
     await client.query("INSERT INTO user_roles (user_id, role_id) VALUES ($1, 'teacher') ON CONFLICT DO NOTHING", [userId]);
     await client.query("UPDATE company_memberships SET is_default = false WHERE user_id = $1", [userId]);
     await client.query("INSERT INTO company_memberships (company_id, user_id, role, is_default) VALUES ($1,$2,'owner',true)", [id, userId]);
     const profileId = await ensurePgTeacherProfile(client, userId, id);
     await client.query("UPDATE teacher_profiles SET organization_id = $1, is_company_owner = true WHERE id = $2", [id, profileId]);
     await client.query("COMMIT");
-    return { id, name: input.name.trim(), type: input.type, isDefault: true };
+    return { id, name: input.name.trim(), type: input.type, address: input.address?.trim() ?? "", phoneNumber: input.phoneNumber?.trim() ?? "", isDefault: true };
   } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
 }
 

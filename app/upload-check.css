@@ -61,3 +61,11 @@
 @keyframes upload-check-spin {
   to { transform: rotate(360deg); }
 }
+
+.dancer-reference-frame-wrap { position: relative; width: 100%; line-height: 0; }
+.dancer-reference-frame-wrap .dancer-reference-frame { width: 100%; }
+.dancer-frame-target { position: absolute; z-index: 2; padding: 0; border: 2px solid #f59a45; border-radius: 5px; background: #f59a4526; box-shadow: 0 0 0 1px #21163366; color: #fff; cursor: pointer; }
+.dancer-frame-target:hover, .dancer-frame-target.selected { border-color: #8c6eea; background: #8c6eea44; }
+.dancer-frame-target span { position: absolute; top: 5px; left: 5px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: #f59a45; color: #211633; font: 700 13px var(--sans); line-height: 1; }
+.dancer-frame-target.selected span { background: #8c6eea; color: #fff; }
+.dancer-frame-point { position: absolute; z-index: 3; width: 22px; height: 22px; border: 3px solid white; border-radius: 50%; background: #7659d2; transform: translate(-50%, -50%); pointer-events: none; }

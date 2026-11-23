@@ -1,0 +1,2 @@
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS address text NOT NULL DEFAULT '';
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS phone_number text NOT NULL DEFAULT '';

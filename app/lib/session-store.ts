@@ -4,7 +4,7 @@ import type { DanceCritique, TeacherFeedback } from "./gemini-critique";
 import { isDanceCritique, isTeacherFeedback } from "./gemini-critique";
 
 export type StudentProfile = { id: string; name: string; organizationId: string | null; organizationName: string | null; createdAt: string };
-export type TeacherOrganization = { id: string; name: string; type: "studio" | "private_company" | "other"; isDefault?: boolean };
+export type TeacherOrganization = { id: string; name: string; type: "studio" | "private_company" | "other"; address?: string | null; phoneNumber?: string | null; isDefault?: boolean };
 export type LocalTeacherProfile = { isCompanyOwner: boolean; companyRole: "owner" | "admin" | "teacher" | "staff" | null };
 export type CompanyMember = { userId: string; name: string; email: string | null; role: "owner" | "admin" | "teacher" | "staff"; joinedAt: string };
 export type Invitation = { token: string; email: string; role: "teacher" | "student"; studentId: string | null; status: "pending" | "accepted" | "revoked"; expiresAt: string; createdAt: string };
@@ -195,19 +195,41 @@ export function listCompanies(): TeacherOrganization[] {
   } finally { db.close(); }
 }
 
-export function createCompanyForTeacher(userId: string, input: { name: string; type: TeacherOrganization["type"] }): TeacherOrganization | "exists" {
+export function listOwnedCompanies(userId: string): TeacherOrganization[] {
+  const db = openDanceDatabase();
+  try {
+    return (db.prepare(`SELECT o.id, o.display_name, o.organization_type, o.address, o.phone_number
+      FROM company_memberships cm JOIN organizations o ON o.id = cm.company_id
+      WHERE cm.user_id = ? AND cm.role = 'owner' ORDER BY o.display_name COLLATE NOCASE`).all(userId) as Array<{ id: string; display_name: string; organization_type: TeacherOrganization["type"]; address: string | null; phone_number: string | null }>).map((company) => ({ id: company.id, name: company.display_name, type: company.organization_type, address: company.address, phoneNumber: company.phone_number }));
+  } finally { db.close(); }
+}
+
+export function updateOwnedCompany(userId: string, companyId: string, input: { name: string; type: TeacherOrganization["type"]; address: string; phoneNumber: string }): TeacherOrganization | "exists" | null {
+  const db = openDanceDatabase();
+  try {
+    const owned = db.prepare("SELECT 1 FROM company_memberships WHERE company_id = ? AND user_id = ? AND role = 'owner'").get(companyId, userId);
+    if (!owned) return null;
+    const duplicate = db.prepare("SELECT 1 FROM organizations WHERE lower(display_name) = lower(?) AND id <> ?").get(input.name.trim(), companyId);
+    if (duplicate) return "exists";
+    db.prepare("UPDATE organizations SET display_name = ?, organization_type = ?, address = ?, phone_number = ? WHERE id = ?").run(input.name.trim(), input.type, input.address.trim(), input.phoneNumber.trim(), companyId);
+    const row = db.prepare("SELECT id, display_name, organization_type, address, phone_number FROM organizations WHERE id = ?").get(companyId) as { id: string; display_name: string; organization_type: TeacherOrganization["type"]; address: string | null; phone_number: string | null };
+    return { id: row.id, name: row.display_name, type: row.organization_type, address: row.address, phoneNumber: row.phone_number };
+  } finally { db.close(); }
+}
+
+export function createCompanyForTeacher(userId: string, input: { name: string; type: TeacherOrganization["type"]; address?: string; phoneNumber?: string }): TeacherOrganization | "exists" {
   const db = openDanceDatabase();
   try {
     if (db.prepare("SELECT 1 FROM organizations WHERE display_name = ?").get(input.name.trim())) return "exists";
     db.exec("BEGIN IMMEDIATE");
     const id = randomUUID();
-    db.prepare("INSERT INTO organizations (id, display_name, organization_type) VALUES (?, ?, ?)").run(id, input.name.trim(), input.type);
+    db.prepare("INSERT INTO organizations (id, display_name, organization_type, address, phone_number) VALUES (?, ?, ?, ?, ?)").run(id, input.name.trim(), input.type, input.address?.trim() ?? "", input.phoneNumber?.trim() ?? "");
     const profile = ensureTeacherProfile(db, userId);
     db.prepare("UPDATE company_memberships SET is_default = 0 WHERE user_id = ?").run(userId);
     db.prepare("INSERT INTO company_memberships (company_id, user_id, role, is_default) VALUES (?, ?, 'owner', 1)").run(id, userId);
     db.prepare("UPDATE teacher_profiles SET organization_id = ? WHERE id = ?").run(id, profile.id);
     db.exec("COMMIT");
-    return { id, name: input.name.trim(), type: input.type };
+    return { id, name: input.name.trim(), type: input.type, address: input.address?.trim() ?? "", phoneNumber: input.phoneNumber?.trim() ?? "" };
   } catch (error) {
     try { db.exec("ROLLBACK"); } catch { /* No transaction was active. */ }
     throw error;

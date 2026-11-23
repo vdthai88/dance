@@ -115,6 +115,7 @@
 .library-group-heading{display:flex;justify-content:space-between;align-items:center;gap:10px}
 .library-group-toggle{display:flex;align-items:center;gap:10px;min-height:44px;padding:5px 0;border:0;background:none;color:var(--ink);font:14px var(--sans);cursor:pointer;text-align:left;min-width:0}
 .library-group-toggle strong{overflow-wrap:anywhere}
+.library-group-toggle{position:relative}.library-group-toggle strong{cursor:text}.library-group-toggle[data-tooltip]::after{content:attr(data-tooltip);position:absolute;left:28px;top:calc(100% - 2px);z-index:20;padding:5px 7px;border-radius:3px;background:var(--ink);color:#fff;font:10px var(--sans);white-space:nowrap;opacity:0;pointer-events:none;transform:translateY(-2px);transition:opacity .12s,transform .12s}.library-group-toggle[data-tooltip]:hover::after,.library-group-toggle[data-tooltip]:focus-visible::after{opacity:1;transform:translateY(0)}.library-group-inline-edit{display:flex;margin:4px 0 8px;padding-left:25px}.library-group-inline-edit input{width:min(360px,100%);padding:7px 9px;border:1px solid #8c6eea;border-radius:4px;background:#fff;color:var(--ink);font:600 14px var(--sans);box-shadow:0 0 0 2px #8c6eea22}
 .library-group-toggle small{color:var(--muted);font-size:11px;white-space:nowrap}
 .library-group .video-library-list{margin-top:8px}
 .library-video-organization{display:flex;align-items:end;flex-wrap:wrap;gap:14px;margin:12px 0}
@@ -131,6 +132,11 @@
 .saved-review-videos strong{font-size:12px}
 .saved-review-videos p{font-size:11px;overflow-wrap:anywhere;color:var(--muted)}
 .saved-review-videos video{display:block;width:100%;max-height:460px;aspect-ratio:16/10;object-fit:contain;background:#161519;border-radius:3px}
+.saved-video-review[data-pending-review]{scroll-margin-top:16px}
+.saved-video-review[data-pending-review] .saved-review-videos video{max-height:clamp(120px,calc(100svh - 110px),460px)}
+@media(max-width:1000px){
+  .saved-video-review[data-pending-review] .saved-review-videos video{max-height:clamp(120px,calc(100svh - 330px - env(safe-area-inset-bottom,0px)),460px)}
+}
 .saved-review-controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px}
 @media(max-width:1000px){.saved-review-grid{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:600px){.saved-review-videos.paired{grid-template-columns:1fr}.video-library-row{align-items:flex-start;flex-wrap:wrap}.library-group{padding:10px}.library-create-group label{width:100%}.library-create-group input{width:100%}.library-video-organization select{max-width:200px}}
@@ -141,6 +147,16 @@
 .library-group-heading{flex-wrap:wrap}.library-group-heading>.library-group-toggle{flex:1}.library-group-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.library-group-actions .library-newer-take:disabled{opacity:.5;cursor:default}@media(max-width:600px){.library-group-heading>.library-group-toggle{flex-basis:100%}.library-group-actions{padding-bottom:8px}}
 .video-library-heading h2{font:600 20px/1.3 var(--sans)}@media(max-width:700px){.video-library-heading h2{font-size:18px}}
 .library-upload-area{margin:16px 0 24px}.library-upload-area .review-grid{margin-top:12px}
+.profile-form.profile-disclosure{display:block;margin-top:12px;padding-top:0;padding-bottom:0;border-top:1px solid var(--line)}
+.profile-disclosure>summary{padding:16px 0;cursor:pointer;color:var(--ink);font:500 20px/1.25 var(--serif)}
+.profile-disclosure>summary::marker{color:var(--orange)}
+.profile-disclosure>summary:focus-visible{outline:2px solid var(--orange);outline-offset:3px}
+.profile-disclosure[open]>.profile-disclosure-content{display:flex;flex-direction:column;gap:15px;padding-bottom:18px}
+.profile-disclosure-nested{border-top:1px solid var(--line)}
+.profile-disclosure-nested>summary{padding:12px 0;font:600 14px/1.4 var(--sans)}
+.roster-coming-soon{padding:16px 0}
+.profile-form .roster-coming-soon h2{margin:0 0 5px;font:500 20px/1.25 var(--serif)}
+.company-create-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:end}.owned-companies{margin-top:20px;padding-top:18px;border-top:1px solid var(--line)}.owned-companies h3{font:500 22px var(--serif);margin:8px 0 4px}.owned-companies>p{color:var(--muted);font-size:11px;margin:0 0 14px}.owned-company-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:16px 0;border-top:1px solid var(--line)}.owned-company-form label{display:grid;gap:6px;color:var(--muted);font-size:11px}.owned-company-form input,.owned-company-form select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:4px;background:#fff;color:var(--ink);font:12px var(--sans)}.owned-company-form-heading{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center}.owned-company-form-heading strong{font-size:14px}.owned-company-form-heading span{font:9px var(--mono);color:#7659d2;text-transform:uppercase}.owned-company-form-actions{grid-column:1/-1;display:flex;align-items:center;gap:12px}.owned-company-form-actions span{color:#607753;font-size:11px}@media(max-width:700px){.company-create-form,.owned-company-form{grid-template-columns:1fr}}
 .saved-review-video-heading{font-size:12px}.saved-review-video-heading p{margin:8px 0 12px;font-size:11px;overflow-wrap:anywhere;color:var(--muted)}.saved-review-grid{align-items:stretch}.saved-review-feedback{position:relative;min-height:0;min-width:0}.saved-review-feedback-inner{position:absolute;inset:0;overflow:auto;overscroll-behavior:contain}.saved-review-feedback-inner>.critique-card,.saved-review-feedback-inner>.aside-card{min-height:100%}.saved-review-feedback-inner>.insights-column{height:100%;display:flex;flex-direction:column}.saved-review-feedback-inner .ai-feedback-status{min-height:0;flex:1}.saved-review-feedback-inner .ai-feedback-status:only-child{height:100%}@media(max-width:1000px){.saved-review-feedback-inner{position:static;overflow:visible}.saved-review-feedback-inner>.insights-column{height:auto}.saved-review-feedback-inner .ai-feedback-status{min-height:220px;height:auto}}
 .profile-heading .profile-required-message{color:#bf3030;font-weight:600}@media(prefers-color-scheme:dark){.profile-heading .profile-required-message{color:#ff8b85}}
 .replai-name .replai-beta{font-family:var(--sans);font-size:max(8px,.55em);font-style:normal;font-weight:600;line-height:0;vertical-align:super;letter-spacing:.025em;color:#7659d2}.sidebar-item b .replai-beta{color:#f59a45}.sidebar-item.active b .replai-beta{color:#f59a45}

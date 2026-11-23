@@ -17,9 +17,9 @@ import { attachSessionCritique, attachSessionVideo } from "../../lib/session-sto
 import { saveLocalVideo } from "../../lib/video-storage";
 import { isUploadedVideo, MAX_VIDEO_BYTES, readVideoUpload, VideoUploadError } from "../../lib/video-upload";
 import type { UploadedVideo, VideoUpload } from "../../lib/video-upload";
-import { DANCER_DETECTION_PROMPT, dancerDetectionSchema, isDancerDetection, automaticDancer } from "../../lib/dancer-selection";
+import { DANCER_DETECTION_PROMPT, dancerDetectionSchema, isDancerDetection, needsDancerConfirmation } from "../../lib/dancer-selection";
 import type { DancerChoiceRequest } from "../../lib/dancer-selection";
-import { getPgDancerSelection, savePgDancerDetection, selectPgDancer } from "../../lib/postgres-dancer-store";
+import { getPgDancerSelection, savePgDancerDetection } from "../../lib/postgres-dancer-store";
 
 export const runtime = "nodejs";
 export const maxDuration = 600;
@@ -192,15 +192,29 @@ async function readInteractionStream(response: Response) {
   return { id, status, text: text.trim(), failure, contentType, parsedEvents, dataLines, eventTypes, responseChars: rawBody.length };
 }
 
-async function fetchModelWithRetry(url: string, init: RequestInit) {
-  let response = await fetch(url, init);
-  if (response.status !== 503) return response;
+const AI_BUSY_MESSAGE = "AI is temporarily busy. Wait a minute, then retry AI feedback.";
 
-  console.warn("AI is temporarily overloaded; retrying the model request once.");
-  await response.body?.cancel().catch(() => undefined);
-  await new Promise((resolve) => setTimeout(resolve, 2000));
-  response = await fetch(url, init);
-  return response;
+async function requestModelInteraction(init: RequestInit) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch(`${GEMINI_BASE}/interactions`, init);
+    if (response.status === 503) {
+      await response.body?.cancel().catch(() => undefined);
+    } else {
+      if (!response.ok) {
+        const failure = await responseError(response);
+        throw new GeminiRequestError(failure.message, failure.status);
+      }
+      const interaction = await readInteractionStream(response);
+      const code = String(interaction.failure?.code).toLowerCase();
+      if (!["service_unavailable", "unavailable", "503"].includes(code)) return interaction;
+    }
+    if (attempt === 0) {
+      console.warn("AI is temporarily overloaded; retrying the model request once.");
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+  console.warn("AI is still overloaded after one retry.");
+  throw new GeminiRequestError(AI_BUSY_MESSAGE, 503);
 }
 
 async function responseError(response: Response) {
@@ -213,8 +227,8 @@ async function responseError(response: Response) {
     return { message: "AI reached a usage or rate limit. Please try again later.", status: 429 };
   }
   if (response.status === 503) {
-    console.warn("AI is still overloaded after a retry:", message);
-    return { message: "AI is temporarily busy and could not start the critique. Wait a minute, then try again.", status: 503 };
+    console.warn("AI returned a service unavailable response:", message);
+    return { message: AI_BUSY_MESSAGE, status: 503 };
   }
   console.error("AI dance critique request failed:", response.status, message);
   return { message: "AI could not complete the critique. Check the VS Code terminal for details, then try again.", status: 502 };
@@ -307,27 +321,25 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
     const choices: DancerChoiceRequest[] = [];
     const subjects: Awaited<ReturnType<typeof getPgDancerSelection>>[] = [];
     for (const [index, video] of videos.entries()) {
-      let selection = await getPgDancerSelection(user.id, video.sha256);
-      if (!selection.target || forceDancerChoice) {
+      const selection = await getPgDancerSelection(user.id, video.sha256);
+      if (needsDancerConfirmation(selection.target, forceDancerChoice)) {
         let detection = selection.detection;
         if (!detection) {
-          const response = await fetchModelWithRetry(`${GEMINI_BASE}/interactions`, {
+          const result = await requestModelInteraction({
             method: "POST", headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
             body: JSON.stringify({ model, stream: true, system_instruction: DANCER_DETECTION_PROMPT,
               input: [{ type: "video", uri: preparedFiles[index].uri!, mime_type: preparedFiles[index].mimeType! }],
               response_format: { type: "text", mime_type: "application/json", schema: dancerDetectionSchema } }),
           });
-          if (!response.ok) { const failure = await responseError(response); throw new GeminiRequestError(failure.message, failure.status); }
-          const result = await readInteractionStream(response);
           if (result.failure || result.status !== "completed") throw new GeminiRequestError("AI could not identify the dancers. Please retry.", 502);
           const parsed: unknown = JSON.parse(result.text);
           if (!isDancerDetection(parsed)) throw new GeminiRequestError("AI returned an unclear dancer detection. Please retry.", 502);
-          detection = parsed;
+          detection = parsed.visiblePersonCount !== undefined && parsed.visiblePersonCount > 1 && parsed.status === "single"
+            ? { ...parsed, status: "multiple" as const }
+            : parsed;
           await savePgDancerDetection(user.id, video.sha256, detection);
         }
-        const automatic = automaticDancer(detection);
-        if (automatic && !forceDancerChoice) { await selectPgDancer(user.id, video.sha256, automatic, true); selection = await getPgDancerSelection(user.id, video.sha256); }
-        else choices.push({ take: index === 0 ? "earlier" : "newer", detection });
+        choices.push({ take: index === 0 ? "earlier" : "newer", detection });
       }
       subjects.push(selection);
     }
@@ -362,7 +374,8 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
       input.push({ type: "text", text: `A saved original critique exists for the earlier video. Use it as the baseline and compare these same moments in both videos. For each baseline timestamp, inspect the mapped newer timestamp after aligning song starts. Determine whether the note appears resolved, still present, changed, or cannot be assessed from the footage. Ground every judgment in visible evidence, and preserve uncertainty.\nSong-start markers: earlier=${earlierSongStart.toFixed(2)}s, newer=${newerSongStart.toFixed(2)}s.\nMapped baseline observations and original feedback:\n${JSON.stringify(mappedObservations)}\nOriginal critique summary and limitations:\n${JSON.stringify({ summary: savedBaseline.critique.summary, limitations: savedBaseline.critique.limitations })}` });
     }
     input.push({ type: "text", text: videos.length === 2 ? "Compare the two takes using the instructor instructions." : "Review the dance practice video using the instructor instructions." });
-    const interactionResponse = await fetchModelWithRetry(`${GEMINI_BASE}/interactions`, {
+    requestStage = "waiting for AI to analyze the video";
+    const interaction = await requestModelInteraction({
       method: "POST",
       headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -377,13 +390,6 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
         stream: true,
       }),
     });
-    if (!interactionResponse.ok) {
-      const failure = await responseError(interactionResponse);
-      return jsonError(failure.message, failure.status);
-    }
-
-    requestStage = "waiting for AI to analyze the video";
-    const interaction = await readInteractionStream(interactionResponse);
     if (interaction.failure || interaction.status !== "completed") {
       console.error("AI critique stream ended without a complete response:", JSON.stringify({
         id: interaction.id,

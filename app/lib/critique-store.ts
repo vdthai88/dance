@@ -206,6 +206,9 @@ export function openDanceDatabase() {
       ON company_join_requests(company_id, status);
   `);
   db.exec("PRAGMA foreign_keys = ON");
+  const organizationColumns = db.prepare("PRAGMA table_info(organizations)").all() as Array<{ name: string }>;
+  if (!organizationColumns.some((column) => column.name === "address")) db.exec("ALTER TABLE organizations ADD COLUMN address TEXT NOT NULL DEFAULT ''");
+  if (!organizationColumns.some((column) => column.name === "phone_number")) db.exec("ALTER TABLE organizations ADD COLUMN phone_number TEXT NOT NULL DEFAULT ''");
   const studentColumns = db.prepare("PRAGMA table_info(students)").all() as Array<{ name: string }>;
   if (!studentColumns.some((column) => column.name === "organization_id")) {
     db.exec("ALTER TABLE students ADD COLUMN organization_id TEXT REFERENCES organizations(id) ON DELETE SET NULL");

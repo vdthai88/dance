@@ -274,7 +274,7 @@ export default function Home() {
     if (selectionId !== critiqueRequestId.current) return;
     const file = new File([blob], video.filename, { type: video.contentType || blob.type || "video/mp4" });
     savedVideoIds.current.set(file, video.id);
-    setVideoFile(file); setComparisonFile(null); setForceDancerChoice(false);
+    setVideoFile(file); setComparisonFile(null); setForceDancerChoice(true);
     setActiveLibraryVideoId(video.id); setFocusedLibraryVideoId(video.id);
     setLibraryRefreshKey((current) => current + 1);
     setError(""); setVideoSaveError(""); setUploadNotice(""); setAutoCritiquePending(true);
@@ -396,12 +396,6 @@ export default function Home() {
     return () => window.clearTimeout(timeout);
   }, [videoFile, comparisonFile, autoAlignMusic]);
 
-  useEffect(() => {
-    if (!isCritiquing || !activeLibraryVideoId) return;
-    const timer = window.setTimeout(() => document.getElementById("ai-feedback-status")?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
-    return () => window.clearTimeout(timer);
-  }, [isCritiquing, activeLibraryVideoId]);
-
   const activeCompanies = profile === "teacher" ? teacherCompanies : studentCompanies;
   const activeCompanyId = profile === "teacher" ? activeTeacherCompanyId : activeStudentCompanyId;
   const activeCompany = activeCompanies.find((company) => company.id === activeCompanyId) ?? null;
@@ -426,7 +420,7 @@ export default function Home() {
                 <button className="toggle-button" type="button" disabled={isAutoAligning || isCritiquing || savingVideos > 0 || !Number.isFinite(earlierSongStart) || earlierSongStart < 0 || !Number.isFinite(newerSongStart) || newerSongStart < 0} onClick={() => { setAlignmentSource("manual"); setAlignmentFailed(false); setAutoCritiquePending(true); setError(""); }}>Use these start times and compare</button>
                 <button className="text-button" type="button" disabled={isAutoAligning || isCritiquing || savingVideos > 0} onClick={() => { setAutoCritiquePending(true); void autoAlignMusic(); }}>Retry audio alignment</button>
               </div>}
-    {!dancerChoices.length && <aside id="ai-feedback-status" className="aside-card ai-feedback-status" aria-busy={aiFeedbackBusy}>
+    {!dancerChoices.length && <aside className="aside-card ai-feedback-status" aria-busy={aiFeedbackBusy}>
                 <div className="eyebrow muted">AI FEEDBACK</div>
                 <div role="status" aria-live="polite">
                   <h3>{isCritiquing ? "AI is reviewing your video" : savingVideos > 0 ? "Uploading your video" : aiFeedbackBusy ? "Preparing your AI feedback" : comparisonFile && !alignmentSource ? "Confirm song starts" : "Your next take starts here."}</h3>

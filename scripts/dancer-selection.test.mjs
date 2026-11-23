@@ -1,16 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { automaticDancer, isDancerDetection, isDancerTarget } from '../app/lib/dancer-selection.ts';
+import { needsDancerConfirmation, isDancerDetection, isDancerTarget } from '../app/lib/dancer-selection.ts';
 import { makeCritiqueKey } from '../app/lib/critique-key.ts';
 const detection = { status: 'single', confidence: 'high', referenceSeconds: 2, candidates: [{ description: 'Blue shirt, left of frame.' }], explanation: 'One clear dancer.' };
-test('only a high-confidence single dancer proceeds automatically', () => {
-  assert.ok(isDancerDetection(detection));
-  assert.equal(automaticDancer(detection).description, detection.candidates[0].description);
-  assert.equal(automaticDancer({ ...detection, status: 'multiple', candidates: [...detection.candidates, { description: 'Black clothing, right.' }] }), null);
-  assert.equal(automaticDancer({ ...detection, status: 'uncertain' }), null);
-  assert.equal(automaticDancer({ ...detection, confidence: 'medium' }), null);
-  assert.equal(automaticDancer({ ...detection, candidates: [] }), null);
-  assert.equal(automaticDancer({ ...detection, candidates: [...detection.candidates, ...detection.candidates] }), null);
+test('a new take requires confirmation and a saved choice can be reopened', () => {
+  assert.ok(isDancerDetection({ ...detection, visiblePersonCount: 1 }));
+  const savedTarget = { ...detection.candidates[0], referenceSeconds: detection.referenceSeconds };
+  assert.equal(needsDancerConfirmation(null, false), true);
+  assert.equal(needsDancerConfirmation(savedTarget, false), false);
+  assert.equal(needsDancerConfirmation(savedTarget, true), true);
 });
 test('invalid reference times and descriptions cannot become dancer selections', () => {
   for (const referenceSeconds of [-1, NaN, Infinity, 10801, '2']) assert.equal(isDancerTarget({ description: 'Blue shirt', referenceSeconds }), false);
