@@ -3,11 +3,13 @@ import { getAuthenticatedUser } from "../../lib/auth-session";
 import { usesPostgres } from "../../lib/database-driver";
 import { createPgCompanyForTeacher, listPgCompanies, listPgOwnedCompanies } from "../../lib/postgres-organization-store";
 import { createCompanyForTeacher, listCompanies, listOwnedCompanies } from "../../lib/session-store";
+import { stagingAccessEnabled } from "../../lib/staging-access";
 
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
   const user = await getAuthenticatedUser(request);
+  if (stagingAccessEnabled() && !user) return NextResponse.json({ error: "Sign in to view companies." }, { status: 401 });
   if (new URL(request.url).searchParams.get("owned") === "true") {
     if (!user) return NextResponse.json({ error: "Sign in to view your companies." }, { status: 401 });
     return NextResponse.json(usesPostgres() ? await listPgOwnedCompanies(user.id) : listOwnedCompanies(user.id), { headers: { "Cache-Control": "no-store" } });

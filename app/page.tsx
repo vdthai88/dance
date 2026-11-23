@@ -266,7 +266,7 @@ export default function Home() {
     event.preventDefault(); setDragging(false); chooseFile(event.dataTransfer.files[0]);
   }
 
-  async function reviewLibraryVideo(video: LibraryVideo) {
+  async function reviewLibraryVideo(video: LibraryVideo, chooseDancer: boolean) {
     cancelCurrentCritique();
     const selectionId = critiqueRequestId.current;
     const response = await fetch(`/api/replai-videos/${encodeURIComponent(video.id)}/content`, { cache: "no-store" });
@@ -275,7 +275,7 @@ export default function Home() {
     if (selectionId !== critiqueRequestId.current) return;
     const file = new File([blob], video.filename, { type: video.contentType || blob.type || "video/mp4" });
     savedVideoIds.current.set(file, video.id);
-    setVideoFile(file); setComparisonFile(null); setForceDancerChoice(true);
+    setVideoFile(file); setComparisonFile(null); setForceDancerChoice(chooseDancer);
     setActiveLibraryVideoId(video.id); setFocusedLibraryVideoId(video.id);
     setLibraryRefreshKey((current) => current + 1);
     setError(""); setVideoSaveError(""); setUploadNotice(""); setAutoCritiquePending(true);

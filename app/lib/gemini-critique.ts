@@ -1,5 +1,29 @@
 export type ProgressStatus = "improved" | "keep_practising" | "new" | "unassessable";
 
+export const DANCE_SCORE_CATEGORIES = {
+  technicalAbility: { label: "Technical ability", maximum: 45 },
+  difficulty: { label: "Difficulty", maximum: 25 },
+  performance: { label: "Performance", maximum: 30 },
+} as const;
+
+type DanceScoreCategory = keyof typeof DANCE_SCORE_CATEGORIES;
+export type DanceScores = Record<DanceScoreCategory, number | null>;
+
+export function totalDanceScore(scores: DanceScores): number | null {
+  const { technicalAbility, difficulty, performance } = scores;
+  if (technicalAbility === null || difficulty === null || performance === null) return null;
+  return technicalAbility + difficulty + performance;
+}
+
+function isDanceScores(value: unknown): value is DanceScores {
+  if (!value || typeof value !== "object") return false;
+  const scores = value as Record<string, unknown>;
+  return Object.entries(DANCE_SCORE_CATEGORIES).every(([key, { maximum }]) => {
+    const score = scores[key];
+    return score === null || (typeof score === "number" && Number.isInteger(score) && score >= 0 && score <= maximum);
+  });
+}
+
 export type CritiqueObservation = {
   timestampSeconds: number | null;
   area: string;
@@ -17,6 +41,7 @@ export type DanceCritique = {
   summary: string;
   observations: CritiqueObservation[];
   limitations: string[];
+  scores?: DanceScores;
   comparison?: string;
   subject?: { description: string; referenceSeconds: number };
 };
@@ -66,13 +91,28 @@ export function isTeacherFeedback(value: unknown): value is TeacherFeedback {
     });
 }
 
+const DANCE_SCORING_RUBRIC = `Score the selected dancer with this 100-point rubric. Return whole-number points for each category within its own maximum.
+- Technical ability (0–${DANCE_SCORE_CATEGORIES.technicalAbility.maximum}): assess the execution of the movements actually attempted, including control and alignment in turns and jumps, landings, balance, footwork, and transitions. A simple move can earn full execution credit. Do not require particular moves.
+- Difficulty (0–${DANCE_SCORE_CATEGORIES.difficulty.maximum}): assess the demands of the observed choreography within its style, including speed, complexity of combinations, coordination, and precision required. Basic repeated patterns are low, varied combinations with moderate coordination demands are mid-range, and sustained complex sequences with fast transitions or advanced elements are high. Judge what is attempted separately from how well it is executed.
+- Performance (0–${DANCE_SCORE_CATEGORIES.performance.maximum}): assess musicality, expression, dynamics, and sustained commitment. Assess choices in the context of the style.
+For technical ability and performance, use the lower third for frequent observable breakdowns, the middle third for mixed execution or delivery, and the upper third for consistently strong execution or delivery. Use the top of the range for sustained excellence across the clip. Ground each category in the clip, and ignore appearance, attire, identity, and production quality. Where the available footage or audio cannot support a category score, return null and explain the limitation. Return only category scores; the application calculates the total.`;
+
 export const DANCE_CRITIQUE_PROMPT = `Act as an experienced dance instructor. Analyze this video and provide a constructive, technically detailed critique. Evaluate posture, balance, body alignment, footwork, arm placement, movement transitions, timing, musicality, control, and expression. Identify specific moments where the technique could improve. For each issue, explain what you observe, what the dancer should be doing instead, and give a practical exercise to correct it. Distinguish clearly between what you can actually observe and what you cannot determine from the video.
 
-Return a concise, supportive critique. Do not assign an overall grade or claim to know the dancer's intent. Only describe details visible or audible in the clip. If a body part is out of frame, obscured, or too brief to assess, say so and lower your confidence. Use timestamps in seconds and include a timestamp only when you can identify the moment. Avoid presenting style-dependent choices as errors when the dance style is unknown.`;
+Return a concise, supportive critique. Do not claim to know the dancer's intent. Only describe details visible or audible in the clip. If a body part is out of frame, obscured, or too brief to assess, say so and lower your confidence. Use timestamps in seconds and include a timestamp only when you can identify the moment. Avoid presenting style-dependent choices as errors when the dance style is unknown.
+
+${DANCE_SCORING_RUBRIC}`;
 
 export const danceCritiqueSchema = {
   type: "object",
   properties: {
+    scores: {
+      type: "object",
+      properties: Object.fromEntries(Object.entries(DANCE_SCORE_CATEGORIES).map(([key, { label, maximum }]) => [
+        key, { type: ["integer", "null"], minimum: 0, maximum, description: `${label} points, or null when unassessable.` },
+      ])),
+      required: Object.keys(DANCE_SCORE_CATEGORIES),
+    },
     summary: {
       type: "string",
       description: "A short encouraging overview of the performance and the main opportunity to improve.",
@@ -99,10 +139,13 @@ export const danceCritiqueSchema = {
       items: { type: "string" },
     },
   },
-  required: ["summary", "observations", "limitations"],
+  required: ["summary", "observations", "limitations", "scores"],
 };
 
-export const DANCE_COMPARISON_PROMPT = `Act as an experienced dance instructor comparing two practice videos of the same dancer. The first video is the earlier take; the second video is the newer take. This review belongs to the newer take: assess progress against the earlier take and any supplied baseline critique, then add fresh observations about the newer performance. Explain which previous issues are resolved, still present, changed, or unassessable. Also identify new strengths and useful improvement opportunities when observable. Return at least five distinct, useful notes across posture, balance, alignment, footwork, arm placement, transitions, timing, musicality, control, and expression. Each note must give an observable strength, change, or improvement opportunity and a practical adjustment or exercise. Describe changes only when clearly visible in both videos. Do not infer improvement when the clips show different choreography, camera angles, framing, or conditions. Never invent issues to reach five notes: if an area is unclear, use low confidence, state the limitation, and give a cautious review cue based only on what can be seen. Distinguish clearly between evidence and uncertainty. Do not assign a score or grade. Mark observations as video "new" and use timestamps in the newer video, so each note can be reviewed with that video alone. Use null when no precise moment is identifiable.
+export const DANCE_COMPARISON_PROMPT = `Act as an experienced dance instructor comparing two practice videos of the same dancer. The first video is the earlier take; the second video is the newer take. This review belongs to the newer take: assess progress against the earlier take and any supplied baseline critique, then add fresh observations about the newer performance. Explain which previous issues are resolved, still present, changed, or unassessable. Also identify new strengths and useful improvement opportunities when observable. Return at least five distinct, useful notes across posture, balance, alignment, footwork, arm placement, transitions, timing, musicality, control, and expression. Each note must give an observable strength, change, or improvement opportunity and a practical adjustment or exercise. Describe changes only when clearly visible in both videos. Do not infer improvement when the clips show different choreography, camera angles, framing, or conditions. Never invent issues to reach five notes: if an area is unclear, use low confidence, state the limitation, and give a cautious review cue based only on what can be seen. Distinguish clearly between evidence and uncertainty. Mark observations as video "new" and use timestamps in the newer video, so each note can be reviewed with that video alone. Use null when no precise moment is identifiable.
+
+Apply the scoring rubric only to the newer take. The earlier take supplies context for the comparison notes.
+${DANCE_SCORING_RUBRIC}
 
 Classify every note with progressStatus independently of video: video "new" means the newer clip, NOT a new coaching point. Revisit each supplied baseline note using its baselineObservationIndex. Use "improved" only for observable progress, "keep_practising" when the same focus remains or needs more attention, and "unassessable" when footage, alignment, choreography, or camera differences prevent a reliable judgment. Use "new" only for genuinely additional observations that do not repeat a baseline point; its baselineObservationIndex must be null. Without a supplied baseline, use null for baselineObservationIndex and compare only clearly corresponding movements in both videos. Give a specific progressReason for every classification. Keep the language encouraging without concealing what still needs practice. Never infer progress from timing markers alone or treat an unseen issue as resolved.`;
 
@@ -136,6 +179,7 @@ export function isDanceCritique(value: unknown): value is DanceCritique {
   return (
     typeof result.summary === "string" &&
     (result.comparison === undefined || typeof result.comparison === "string") &&
+    (result.scores === undefined || isDanceScores(result.scores)) &&
     Array.isArray(result.observations) &&
     (result.comparison === undefined || result.observations.length >= 5) &&
     result.observations.every((item) => {

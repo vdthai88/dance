@@ -1,6 +1,7 @@
 "use client";
 
 import type { DanceCritique, ProgressStatus } from "../lib/gemini-critique";
+import { DANCE_SCORE_CATEGORIES, totalDanceScore } from "../lib/gemini-critique";
 
 function formatTime(seconds: number) {
   const safe = Math.max(0, Math.floor(seconds));
@@ -14,11 +15,28 @@ const progressLabels: Record<ProgressStatus, { label: string; path: string }> = 
   unassessable: { label: "Unable to assess", path: "M9 8a3 3 0 0 1 6 0c0 2-3 2-3 5M12 17h.01M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0" },
 };
 
+const scoreCategories = Object.keys(DANCE_SCORE_CATEGORIES) as Array<keyof typeof DANCE_SCORE_CATEGORIES>;
+
 export function CritiqueCard({ critique, currentTime, onSeek, title, videoName }: { critique: DanceCritique; currentTime: number; onSeek: (time: number, target?: "earlier" | "new" | "both") => void; title?: string; videoName?: string }) {
   const comparison = critique.comparison !== undefined;
   const legacyProgress = comparison && critique.observations.some((note) => !note.progressStatus);
+  const scores = critique.scores;
+  const total = scores ? totalDanceScore(scores) : null;
   return <aside className="critique-card">
     <div className="report-top"><div><div className="eyebrow muted">{title || "AI VIDEO CRITIQUE"}</div><h3>Notes for your<br/><em>next practice.</em></h3></div><span className="sample-tag">AI FEEDBACK</span></div>
+    {scores && <dl className="critique-scores" aria-label={comparison ? "AI scores for the newer take" : "AI scores"}>
+      <div className="critique-score-total">
+        <dt>Total score</dt>
+        <dd>{total === null ? "Not assessable" : `${total} / 100`}</dd>
+      </div>
+      {scoreCategories.map((key) => {
+        const { label, maximum } = DANCE_SCORE_CATEGORIES[key];
+        return <div key={key}>
+          <dt>{label}</dt>
+          <dd>{scores[key] === null ? "Not assessable" : `${scores[key]} / ${maximum}`}</dd>
+        </div>;
+      })}
+    </dl>}
     {videoName && <p className="critique-video-name">Feedback for <strong>{videoName}</strong></p>}
     {critique.subject && <p className="critique-video-name"><strong>Dancer focus:</strong> {critique.subject.description}</p>}
     <p className="critique-summary">{critique.comparison || critique.summary}</p>

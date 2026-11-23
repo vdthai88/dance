@@ -6,6 +6,7 @@ import { usesPostgres } from "../../../lib/database-driver";
 import { choosePgAccountRole } from "../../../lib/postgres-profile-store";
 import { chooseAccountRole } from "../../../lib/session-store";
 import { passwordEntryError } from "../../../lib/password-policy";
+import { stagingAccessError } from "../../../lib/staging-access";
 
 function copyCookies(source: Response, target: NextResponse) {
   const headers = source.headers as Headers & { getSetCookie?: () => string[] };
@@ -28,8 +29,9 @@ export async function POST(request: Request) {
   const passwordError = passwordEntryError(password, form.get("confirmPassword"));
   if (passwordError) return NextResponse.redirect(new URL(`/sign-up?error=${passwordError}`, origin), { status: 303 });
   const authResponse = await callEmailAuth(auth.handler, request, "/api/auth/sign-up/email", { name, email, password });
-  const payload = await authResponse.json().catch(() => null) as { user?: { id?: string } } | null;
+  const payload = await authResponse.json().catch(() => null) as { user?: { id?: string }; code?: string } | null;
   if (!authResponse.ok || !payload?.user?.id) {
+    if (payload?.code === stagingAccessError) return NextResponse.redirect(new URL("/sign-up?error=staging-access", origin), { status: 303 });
     const error = authResponse.status === 429 ? "rate-limited" : authResponse.status === 503 ? "verification-delivery" : "account-not-created";
     return NextResponse.redirect(new URL(`/sign-up?error=${error}`, origin), { status: 303 });
   }

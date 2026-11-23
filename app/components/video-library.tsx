@@ -14,7 +14,7 @@ type Props = {
   onCritiquesDeleted?: () => void;
   onCompare?: (video: LibraryVideo, file: File) => Promise<void>;
   onUpload?: (file: File, groupId: string) => void;
-  onReview?: (video: LibraryVideo) => Promise<void>;
+  onReview?: (video: LibraryVideo, chooseDancer: boolean) => Promise<void>;
   children?: ReactNode;
   pendingReview?: { videoId: string; content: ReactNode } | null;
 };
@@ -150,16 +150,34 @@ export function VideoLibrary({ refreshKey, busy = false, focusVideoId, onCritiqu
     finally { setDeletingId(null); }
   }
 
+  function startSavedReview(video: LibraryVideo, chooseDancer: boolean) {
+    if (!onReview) return;
+    setError("");
+    setUpdating(video.id);
+    void onReview(video, chooseDancer)
+      .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "The AI review could not start."))
+      .finally(() => setUpdating(null));
+  }
+
   function renderVideo(video: LibraryVideo) {
+    const reviewDisabled = busy || loading || updating !== null || deletingId !== null;
     return <li key={video.id}>
       <div className="video-library-row"><div><strong>{video.filename}</strong><p>Upload date: <time dateTime={video.createdAt}>{new Date(video.createdAt).toLocaleString()}</time>{video.byteSize > 0 && <> · {(video.byteSize / (1024 * 1024)).toFixed(1)} MB</>}</p>{!video.available && <p>Original file unavailable. Upload this video again to restore playback.</p>}</div>
         <div className="video-library-actions"><button className="toggle-button" type="button" disabled={deletingId === video.id} aria-expanded={expandedVideoIds.has(video.id)} onClick={() => { setError(""); setExpandedVideoIds((current) => { const next = new Set(current); if (next.has(video.id)) next.delete(video.id); else next.add(video.id); return next; }); }}>{expandedVideoIds.has(video.id) ? "Close review" : "Video & critiques"}</button>
-          {onReview && video.available && <button className="video-review-button" type="button" disabled={busy || loading || updating !== null || deletingId !== null} title="Choose dancer for AI review" aria-label={`Choose dancer for AI review for ${video.filename}`} onClick={() => { setUpdating(video.id); void onReview(video).catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "The AI review could not start.")).finally(() => setUpdating(null)); }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 3l1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3Z" /><path d="m19 15 .7 2.3L22 18l-2.3.7L19 15Z" /></svg></button>}
+          {onReview && video.available && <button className="video-review-button" type="button" disabled={reviewDisabled} title="Choose dancer again" aria-label={`Choose dancer again for ${video.filename}`} onClick={() => startSavedReview(video, true)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 3l1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5L12 3Z" /><path d="m19 15 .7 2.3L22 18l-2.3.7L19 15Z" /></svg></button>}
           {video.available && <a className="video-download-button" href={`/api/replai-videos/${encodeURIComponent(video.id)}/content?download=1`} download={video.filename} title={`Download ${video.filename}`} aria-label={`Download ${video.filename}`}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></svg></a>}
           <button className="video-delete-button" type="button" disabled={busy || loading || deletingId !== null || !video.canDelete} title={video.canDelete ? "Delete " + video.filename : "Only the uploader can delete this session video"} aria-label={"Delete " + video.filename} aria-busy={deletingId === video.id} onClick={() => openDeleteDialog(video)}>
             {deletingId === video.id ? <span className="spinner" aria-hidden="true" /> : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" /></svg>}
           </button></div></div>
-      {expandedVideoIds.has(video.id) && <SavedVideoReview key={video.id} videoId={video.id} video={video} revision={refreshKey + "-" + reviewVersion} pendingContent={pendingReview?.videoId === video.id ? pendingReview.content : null} />}
+      {expandedVideoIds.has(video.id) && <SavedVideoReview
+        key={video.id}
+        videoId={video.id}
+        video={video}
+        revision={refreshKey + "-" + reviewVersion}
+        pendingContent={pendingReview?.videoId === video.id ? pendingReview.content : null}
+        onRequestCritique={onReview && video.available ? () => startSavedReview(video, false) : undefined}
+        critiqueRequestDisabled={reviewDisabled}
+      />}
     </li>;
   }
 

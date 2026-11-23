@@ -3,9 +3,11 @@ import { SocialAuthButtons } from "../components/social-auth-buttons";
 import { NewPasswordFields } from "../components/new-password-fields";
 import { passwordEntryMessages } from "../lib/password-policy";
 import { enabledSocialProviders } from "../lib/social-auth";
+import { stagingAccessEnabled, stagingAccessMessage } from "../lib/staging-access";
 
 const messages: Record<string, string> = {
   ...passwordEntryMessages,
+  "staging-access": stagingAccessMessage,
   "account-not-created": "We could not create that account. It may already use this email address.",
   "invalid-request": "Enter a valid email address and a password with at least 8 characters.",
   "rate-limited": "Too many attempts. Please wait a moment and try again.",
@@ -19,6 +21,7 @@ export default async function SignUpPage({ searchParams }: { searchParams: Promi
   return <main className="auth-page"><section className="auth-card" aria-labelledby="sign-up-title">
     <p className="eyebrow">ONE</p><h1 id="sign-up-title">Create your account</h1><p className="auth-copy">Start keeping your practice sessions and feedback in one place.</p>
     {error && <p className="auth-error" role="alert">{error}</p>}
+    {stagingAccessEnabled() && !error && <p className="auth-copy">{stagingAccessMessage}</p>}
     <form action="/api/local-auth/sign-up" method="post" className="auth-form">
       <label>Email<input name="email" type="email" autoComplete="email" maxLength={254} required /></label>
       <NewPasswordFields />

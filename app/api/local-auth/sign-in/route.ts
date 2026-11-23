@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "../../../lib/auth";
 import { callEmailAuth } from "../../../lib/email-auth-request";
+import { stagingAccessError } from "../../../lib/staging-access";
 
 function copyCookies(source: Response, target: NextResponse) {
   const headers = source.headers as Headers & { getSetCookie?: () => string[] };
@@ -26,6 +27,7 @@ export async function POST(request: Request) {
     if (result?.code === "EMAIL_NOT_VERIFIED") {
       return NextResponse.redirect(new URL("/sign-in?verification=resent", origin), { status: 303 });
     }
+    if (result?.code === stagingAccessError) return NextResponse.redirect(new URL("/sign-in?error=staging-access", origin), { status: 303 });
     const error = authResponse.status === 429 ? "rate-limited" : authResponse.status === 503 ? "verification-delivery" : "invalid-credentials";
     return NextResponse.redirect(new URL(`/sign-in?error=${error}`, origin), { status: 303 });
   }

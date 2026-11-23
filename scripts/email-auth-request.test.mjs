@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { betterAuth } from 'better-auth';
+import { createAuthMiddleware } from 'better-auth/api';
 import { getMigrations } from 'better-auth/db/migration';
 import { callEmailAuth, isValidEmailAddress } from '../app/lib/email-auth-request.ts';
 import { emailVerificationOptions, passwordResetExpiresIn, sendPasswordResetEmail } from '../app/lib/auth-email.ts';
 import { getPasswordRequirements, meetsPasswordPolicy, passwordEntryError, passwordPattern } from '../app/lib/password-policy.ts';
+import { checkStagingEmailRequest, stagingAccessError, stagingDatabaseHooks, stagingEmailAllowed, stagingUserAllowed } from '../app/lib/staging-access.ts';
 
 test('email address validation accepts aliases and rejects malformed addresses', () => {
   assert.ok(isValidEmailAddress('dancer+practice@example.com'));
@@ -28,6 +30,60 @@ test('signup and reset require strength and matching confirmation', () => {
     assert.equal(meetsPasswordPolicy(password), false, password);
     assert.equal(passwordEntryError(password, password), 'weak-password');
   }
+});
+
+test('staging gates signup and sessions using the current list of verified emails', async (t) => {
+  const previous = process.env.STAGING_ALLOWED_EMAILS;
+  t.after(() => {
+    if (previous === undefined) delete process.env.STAGING_ALLOWED_EMAILS;
+    else process.env.STAGING_ALLOWED_EMAILS = previous;
+  });
+  delete process.env.STAGING_ALLOWED_EMAILS;
+  assert.equal(stagingUserAllowed({ email: 'outsider@example.test', emailVerified: false }), true);
+  process.env.STAGING_ALLOWED_EMAILS = '';
+  assert.equal(stagingEmailAllowed('tester@example.test'), false);
+  process.env.STAGING_ALLOWED_EMAILS = ' TESTER@example.test, other@example.test ';
+
+  const database = new DatabaseSync(':memory:');
+  t.after(() => database.close());
+  const origin = 'http://localhost:3000';
+  let verificationLink;
+  const config = {
+    database,
+    baseURL: origin,
+    secret: randomBytes(32).toString('base64'),
+    databaseHooks: stagingDatabaseHooks,
+    emailAndPassword: { enabled: true, requireEmailVerification: true },
+    emailVerification: { sendOnSignUp: true, sendVerificationEmail: async ({ url }) => { verificationLink = url; } },
+    hooks: { before: createAuthMiddleware(async (ctx) => checkStagingEmailRequest(ctx.path, ctx.body?.email)) },
+    rateLimit: { enabled: false },
+  };
+  await (await getMigrations(config)).runMigrations();
+  const auth = betterAuth(config);
+  const context = await auth.$context;
+  const request = new Request(origin, { headers: { Origin: origin } });
+  const credentials = { name: 'Tester', email: 'tester@example.test', password: 'Strong-Dance1!' };
+  const rejected = await callEmailAuth(auth.handler, request, '/api/auth/sign-up/email', { ...credentials, email: 'outsider@example.test' });
+  assert.equal(rejected.status, 403);
+  assert.equal((await rejected.json()).code, stagingAccessError);
+  assert.equal(await context.internalAdapter.findUserByEmail('outsider@example.test'), null);
+  await assert.rejects(context.internalAdapter.createUser({ email: 'outsider@example.test', name: 'Unapproved OAuth user', emailVerified: true }), { status: 'FORBIDDEN' });
+  await assert.rejects(context.internalAdapter.createUser({ email: 'other@example.test', name: 'Unverified OAuth user', emailVerified: false }), { status: 'FORBIDDEN' });
+  assert.equal((await callEmailAuth(auth.handler, request, '/api/auth/sign-up/email', credentials)).status, 200);
+  const signIn = () => callEmailAuth(auth.handler, request, '/api/auth/sign-in/email', credentials);
+  assert.equal((await signIn()).status, 403);
+  assert.ok(verificationLink);
+  await auth.handler(new Request(verificationLink));
+  const login = await signIn();
+  assert.equal(login.status, 200);
+  const cookie = login.headers.getSetCookie().find((entry) => entry.includes('session_token')).split(';')[0];
+  const getSession = () => auth.api.getSession({ headers: new Headers({ cookie }), query: { disableCookieCache: true } });
+  assert.equal(stagingUserAllowed((await getSession()).user), true);
+  process.env.STAGING_ALLOWED_EMAILS = 'other@example.test';
+  assert.equal(stagingUserAllowed((await getSession()).user), false);
+  const blocked = await signIn();
+  assert.equal(blocked.status, 403);
+  assert.equal((await blocked.json()).code, stagingAccessError);
 });
 
 test('email signup and login work behind a public HTTPS proxy without self-fetching', async () => {

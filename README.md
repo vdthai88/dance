@@ -124,6 +124,8 @@ For local development, set `AUTH_EMAIL_DEV_LOG=true` in `.env.local` and restart
 
 For staging, [verify a sending domain in Resend](https://resend.com/docs/dashboard/domains/introduction) and create a sending API key. Add `RESEND_API_KEY` and `AUTH_EMAIL_FROM` (for example, `One Dance <accounts@updates.example.com>`) in Render, with `BETTER_AUTH_URL` set to the public app URL. Deploy the app, create a new test account, and confirm the email arrives and the link opens the staging sign-in page. Keep the key in Render or your local environment file.
 
+To make staging invite-only, set `STAGING_ALLOWED_EMAILS` in the staging Render service to a comma-separated list of approved email addresses, including your own. Redeploy after adding or removing addresses. An empty value blocks all accounts. Leave the variable unset in production and in local development unless you are testing the gate. Approved email/password users still need to verify their email, so keep the staging email sender configured. Removing an address blocks its existing sessions when they next access the app. The staging sign-in page remains publicly reachable.
+
 When a sender is configured, Better Auth requires email verification for email/password sign-in. Links expire after one hour. Signing in with valid credentials before verification sends a fresh link. This also applies to existing unverified password accounts at their next sign-in. Social sign-in continues to use the provider's existing flow. With no sender variables and local logging disabled, verification is inactive. The existing auth schema supports this flow.
 
 ### Dancer selection before AI feedback

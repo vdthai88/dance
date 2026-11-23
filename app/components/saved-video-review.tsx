@@ -43,7 +43,14 @@ function ReviewPlayer({ video, review, pendingContent }: { video: LibraryVideo; 
   </div>;
 }
 
-export function SavedVideoReview({ videoId, video, revision = "", pendingContent }: { videoId: string; video?: LibraryVideo; revision?: string; pendingContent?: ReactNode }) {
+export function SavedVideoReview({ videoId, video, revision = "", pendingContent, onRequestCritique, critiqueRequestDisabled }: {
+  videoId: string;
+  video?: LibraryVideo;
+  revision?: string;
+  pendingContent?: ReactNode;
+  onRequestCritique?: () => void;
+  critiqueRequestDisabled?: boolean;
+}) {
   const reviewSection = useRef<HTMLDivElement>(null);
   const hasPendingReview = Boolean(pendingContent);
   const [details, setDetails] = useState<LibraryVideoDetails | null>(null);
@@ -80,6 +87,10 @@ export function SavedVideoReview({ videoId, video, revision = "", pendingContent
   return <div ref={reviewSection} className="saved-video-review" data-pending-review={hasPendingReview || undefined}>
     {error && <div role="alert"><p className="video-library-error">{error}</p><button className="toggle-button" type="button" onClick={() => { setError(""); setRetry((current) => current + 1); }}>Retry loading review</button></div>}
     {!reviewStatus && reviews.length > 1 && <label className="saved-review-selector">Saved feedback<select value={review?.key ?? ""} onChange={(event) => setSelectedKey(event.target.value)}>{reviews.map((item) => <option key={item.key} value={item.key}>{item.comparison ? "AI comparison" : "AI critique"} · {new Date(item.createdAt).toLocaleString()}</option>)}</select></label>}
+    {details && !error && !reviewStatus && onRequestCritique && !review?.comparison && !review?.critique.scores &&
+      <button className="toggle-button" type="button" disabled={critiqueRequestDisabled} onClick={onRequestCritique}>
+        {review ? "Get scored AI critique" : "Get AI critique"}
+      </button>}
     <ReviewPlayer video={shownVideo} review={review} pendingContent={reviewStatus} />
   </div>;
 }

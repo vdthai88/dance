@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
+import * as scoring from '../app/lib/gemini-critique.ts';
 
 // Render the real components without a browser or a live AI request.
 function loadComponent(relativePath, dependencies = {}, suffix = '') {
@@ -17,7 +18,7 @@ function loadComponent(relativePath, dependencies = {}, suffix = '') {
   new Function('require', 'module', 'exports', outputText)((name) => dependencies[name] ?? localRequire(name), compiledModule, compiledModule.exports);
   return compiledModule.exports;
 }
-const card = loadComponent('../app/components/critique-card.tsx');
+const card = loadComponent('../app/components/critique-card.tsx', { '../lib/gemini-critique': scoring });
 const { ReviewPlayer, SavedVideoReview } = loadComponent('../app/components/saved-video-review.tsx', {
   './critique-card': card,
   '../lib/api-response': { readApiJson() { throw new Error('No API call is expected during server rendering'); } },
@@ -42,6 +43,12 @@ test('the finished critique occupies the same saved review with just one player'
   assert.equal((html.match(/<video\b/g) ?? []).length, 1);
   assert.match(html, /Finished feedback in the saved review/);
   assert.doesNotMatch(html, /AI is reviewing your video/);
+});
+
+test('scored feedback shows the total and three categories before the notes', () => {
+  const scoredReview = { ...review, critique: { ...review.critique, scores: { technicalAbility: 38, difficulty: 20, performance: 27 } } };
+  const html = renderToStaticMarkup(React.createElement(ReviewPlayer, { video, review: scoredReview }));
+  assert.match(html, /Total score.*85 \/ 100.*Technical ability.*38 \/ 45.*Difficulty.*20 \/ 25.*Performance.*27 \/ 30.*Finished feedback/);
 });
 
 test('a newly saved upload can display its player and processing status before feedback loads', () => {

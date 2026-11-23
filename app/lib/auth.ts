@@ -8,6 +8,7 @@ import { usesPostgres } from "./database-driver";
 import { configuredSocialProviders } from "./social-auth";
 import { emailVerificationEnabled, emailVerificationOptions, passwordResetExpiresIn, sendPasswordResetEmail } from "./auth-email";
 import { meetsPasswordPolicy, passwordGuidance } from "./password-policy";
+import { checkStagingEmailRequest, denyStagingAccess, stagingAccessEnabled, stagingDatabaseHooks, stagingEmailAllowed } from "./staging-access";
 
 const databasePath = process.env.DANCE_DATABASE_PATH || join(process.cwd(), "data", "dance.sqlite");
 const localAllowedHosts = (process.env.BETTER_AUTH_ALLOWED_HOSTS || "localhost:*,127.0.0.1:*,192.168.86.162:*")
@@ -19,6 +20,7 @@ const localTrustedOrigins = localAllowedHosts.map((host) => `http://${host.repla
 // Better Auth owns its user, account, session, and verification tables. The
 // rest of the app continues to use the same SQLite file for dance data.
 mkdirSync(dirname(databasePath), { recursive: true });
+const socialProviders = configuredSocialProviders();
 
 export const auth = betterAuth({
   appName: "One",
@@ -32,7 +34,7 @@ export const auth = betterAuth({
   database: usesPostgres() ? getPostgresPool() : new DatabaseSync(databasePath),
   emailAndPassword: {
     enabled: true,
-    requireEmailVerification: emailVerificationEnabled,
+    requireEmailVerification: emailVerificationEnabled || stagingAccessEnabled(),
     resetPasswordTokenExpiresIn: passwordResetExpiresIn,
     revokeSessionsOnPasswordReset: true,
     sendResetPassword: emailVerificationEnabled ? async ({ user, url }): Promise<void> => {
@@ -49,14 +51,33 @@ export const auth = betterAuth({
   },
   hooks: {
     before: createAuthMiddleware(async (ctx) => {
+      checkStagingEmailRequest(ctx.path, ctx.body?.email);
+      if (ctx.path === "/sign-up/email" && stagingAccessEnabled() && !emailVerificationEnabled) {
+        throw new APIError("SERVICE_UNAVAILABLE", { code: "VERIFICATION_DELIVERY_FAILED", message: "Verification email could not be sent." });
+      }
       const field = ctx.path === "/sign-up/email" ? "password" : ctx.path === "/reset-password" ? "newPassword" : null;
       if (field && !meetsPasswordPolicy(ctx.body?.[field])) {
         throw new APIError("BAD_REQUEST", { code: "WEAK_PASSWORD", message: passwordGuidance });
       }
     }),
   },
+  databaseHooks: stagingDatabaseHooks,
   emailVerification: emailVerificationEnabled ? emailVerificationOptions : undefined,
-  socialProviders: configuredSocialProviders(),
+  socialProviders: {
+    ...socialProviders,
+    ...(stagingAccessEnabled() && socialProviders.google ? {
+      google: {
+        ...socialProviders.google,
+        mapProfileToUser(profile: { email: string; email_verified: boolean }) {
+          if (profile.email_verified !== true || !stagingEmailAllowed(profile.email)) denyStagingAccess();
+          return {};
+        },
+      },
+    } : {}),
+  },
+  ...(stagingAccessEnabled() ? {
+    onAPIError: { errorURL: new URL("/sign-in", process.env.BETTER_AUTH_URL || "http://localhost:3000").href },
+  } : {}),
   account: {
     encryptOAuthTokens: true,
     accountLinking: {

@@ -324,7 +324,8 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
       let selection = await getPgDancerSelection(user.id, video.sha256);
       if (needsDancerConfirmation(selection.target, forceDancerChoice)) {
         let detection = selection.detection;
-        if (!detection) {
+        // Older detections lack the count required to skip the picker.
+        if (!detection || (!forceDancerChoice && detection.visiblePersonCount === undefined)) {
           const result = await requestModelInteraction({
             method: "POST", headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
             body: JSON.stringify({ model, stream: true, system_instruction: DANCER_DETECTION_PROMPT,
@@ -355,7 +356,7 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
     const newerSubjectKey = subjects[1]?.key ?? null;
     cacheKey = makeCritiqueKey(earlierHash, newerHash, user.id, { earlier: earlierSubjectKey, newer: newerSubjectKey });
     const cached = await findPgCritique(cacheKey, user.id);
-    if (cached && (!newerHash || (alignment && hasComparisonProgress(cached.critique) && sameSongAlignment(cached, alignment)))) {
+    if (cached?.critique.scores && (!newerHash || (alignment && hasComparisonProgress(cached.critique) && sameSongAlignment(cached, alignment)))) {
       if (sessionId) await attachPgSessionCritique(sessionId, cached.key, user.id);
       return NextResponse.json(cached.critique, { headers: { "X-Critique-Cache": "hit" } });
     }
@@ -419,7 +420,7 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
     } catch {
       return jsonError("AI returned a critique in an unexpected format. Please try again.", 502);
     }
-    if (!isDanceCritique(critique)) return jsonError("AI's critique did not match the expected format. Please try again.", 502);
+    if (!isDanceCritique(critique) || !critique.scores) return jsonError("AI's critique did not match the expected format. Please try again.", 502);
     critique.subject = subjects[subjects.length - 1].target!;
     if (videos.length === 2 && !hasComparisonProgress(critique, savedBaseline?.critique.observations.length ?? 0)) {
       return jsonError("AI did not provide valid progress labels for this comparison. Please try again.", 502);

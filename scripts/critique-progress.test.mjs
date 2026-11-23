@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { danceComparisonSchema, hasComparisonProgress, isDanceCritique } from '../app/lib/gemini-critique.ts';
+import { danceComparisonSchema, danceCritiqueSchema, hasComparisonProgress, isDanceCritique, totalDanceScore } from '../app/lib/gemini-critique.ts';
 
 const observation = {
   timestampSeconds: 37, area: 'Balance', observation: 'The landing is steadier.',
@@ -34,6 +34,21 @@ test('legacy feedback stays readable but is not reused as a classified compariso
   const oldComparison = { ...legacy, comparison: 'Old comparison.', observations: Array.from({ length: 5 }, () => ({ ...observation })) };
   assert.equal(isDanceCritique(oldComparison), true);
   assert.equal(hasComparisonProgress(oldComparison), false);
+});
+
+test('dance scores use bounded whole points and require all three categories for a total', () => {
+  const scores = { technicalAbility: 38, difficulty: 20, performance: 27 };
+  assert.equal(isDanceCritique({ ...comparison(), scores }), true);
+  assert.equal(totalDanceScore(scores), 85);
+  assert.equal(totalDanceScore({ technicalAbility: 45, difficulty: 25, performance: 30 }), 100);
+  for (const value of [-1, 26, 10.5, '20', undefined]) {
+    assert.equal(isDanceCritique({ ...comparison(), scores: { ...scores, difficulty: value } }), false);
+  }
+  const partial = { ...scores, difficulty: null };
+  assert.equal(isDanceCritique({ ...comparison(), scores: partial }), true);
+  assert.equal(totalDanceScore(partial), null);
+  assert.ok(danceCritiqueSchema.required.includes('scores'));
+  assert.ok(danceComparisonSchema.required.includes('scores'));
 });
 
 test('progress requires valid categories, evidence and baseline references', () => {
