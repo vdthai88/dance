@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { ConnectionPanel } from "./connection-panel";
+import { TeacherStudentsPanel } from "./teacher-students-panel";
 import { CompanyAssociationPanel } from "./company-association-panel";
 import { ProPreview } from "./pro-preview";
 import { ProfileSection } from "./profile-section";
@@ -21,7 +22,7 @@ async function readProfileResponse(response: Response) {
   catch { throw new Error("The Profile service returned an invalid response. Restart npm run dev, then refresh this page."); }
 }
 
-export function ProfilePage({ required = false, onComplete, teacherCompanies = [], onDefaultStudio }: { required?: boolean; onComplete?: () => void; teacherCompanies?: TeacherCompany[]; onDefaultStudio?: (companyId: string) => void }) {
+export function ProfilePage({ required = false, onComplete, teacherCompanies = [], onDefaultStudio, onCompaniesChanged }: { required?: boolean; onComplete?: () => void; teacherCompanies?: TeacherCompany[]; onDefaultStudio?: (companyId: string) => void; onCompaniesChanged?: () => void }) {
   const [profile, setProfile] = useState<Profile>(emptyProfile);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -106,7 +107,7 @@ export function ProfilePage({ required = false, onComplete, teacherCompanies = [
       <div className="profile-actions"><button className="button button-dark" disabled={savingCompany || !companyName.trim()}>{savingCompany ? "Saving..." : teacherOrganization ? "Update company" : "Associate company"}</button></div>
       {profile.companies?.length ? <div className="profile-wide"><strong>Company associations</strong><ul className="profile-company-list">{profile.companies?.map((company) => <li key={company.id}>{company.name} <small>{company.type.replace("_", " ")}</small></li>)}</ul></div> : null}
     </form>}
-    {canManageCompany && <CompanyAssociationPanel onChanged={refreshProfile}>
+    {canManageCompany && <CompanyAssociationPanel onChanged={() => { refreshProfile(); onCompaniesChanged?.(); }}>
       {teacherCompanies.length > 0 && <div className="profile-wide">
         <p>Choose one default studio for the next time you sign in.</p>
         <ul className="profile-company-list profile-company-defaults">
@@ -117,12 +118,7 @@ export function ProfilePage({ required = false, onComplete, teacherCompanies = [
         </ul>
       </div>}
     </CompanyAssociationPanel>}
-    {canManageCompany && <section className="profile-form profile-disclosure" aria-labelledby="roster-heading">
-      <div className="profile-wide roster-coming-soon">
-        <h2 id="roster-heading">Manage your roster</h2>
-        <p>Coming soon</p>
-      </div>
-    </section>}
+    {canManageCompany && <TeacherStudentsPanel />}
     {isStudent && <ProfileSection title="Your connections" className="company-form">
       <div className="profile-wide"><p>{profile.companies?.length ? "You can belong to more than one studio or company." : "Request access to a teacher or company to connect."}</p>{profile.companies?.length ? <ul className="profile-company-list">{profile.companies?.map((company) => <li key={company.id}>{company.name} <small>{company.type.replace("_", " ")}</small></li>)}</ul> : null}</div>
       <div className="profile-wide"><ConnectionPanel role="student" /></div>

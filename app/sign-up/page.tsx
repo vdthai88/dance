@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { SocialAuthButtons } from "../components/social-auth-buttons";
-import { PasswordField } from "../components/password-field";
+import { NewPasswordFields } from "../components/new-password-fields";
+import { passwordEntryMessages } from "../lib/password-policy";
 import { enabledSocialProviders } from "../lib/social-auth";
 
 const messages: Record<string, string> = {
+  ...passwordEntryMessages,
   "account-not-created": "We could not create that account. It may already use this email address.",
   "invalid-request": "Enter a valid email address and a password with at least 8 characters.",
   "rate-limited": "Too many attempts. Please wait a moment and try again.",
@@ -19,7 +21,7 @@ export default async function SignUpPage({ searchParams }: { searchParams: Promi
     {error && <p className="auth-error" role="alert">{error}</p>}
     <form action="/api/local-auth/sign-up" method="post" className="auth-form">
       <label>Email<input name="email" type="email" autoComplete="email" maxLength={254} required /></label>
-      <PasswordField autoComplete="new-password" minLength={8} />
+      <NewPasswordFields />
       <fieldset className="role-picker"><legend>I am joining as a</legend><label><input type="radio" name="role" value="student" defaultChecked /> Student</label><label><input type="radio" name="role" value="teacher" /> Teacher</label></fieldset>
       <button type="submit">Create account</button>
     </form>

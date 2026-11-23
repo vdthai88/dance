@@ -5,12 +5,28 @@ import { DatabaseSync } from 'node:sqlite';
 import { betterAuth } from 'better-auth';
 import { getMigrations } from 'better-auth/db/migration';
 import { callEmailAuth, isValidEmailAddress } from '../app/lib/email-auth-request.ts';
-import { emailVerificationOptions } from '../app/lib/auth-email.ts';
+import { emailVerificationOptions, passwordResetExpiresIn, sendPasswordResetEmail } from '../app/lib/auth-email.ts';
+import { getPasswordRequirements, meetsPasswordPolicy, passwordEntryError, passwordPattern } from '../app/lib/password-policy.ts';
 
 test('email address validation accepts aliases and rejects malformed addresses', () => {
   assert.ok(isValidEmailAddress('dancer+practice@example.com'));
   for (const email of ['two@@example.com', 'a..b@example.com', 'a@-example.com', 'a@localhost', 'a b@example.com']) {
     assert.equal(isValidEmailAddress(email), false, email);
+  }
+});
+
+test('signup and reset require strength and matching confirmation', () => {
+  const valid = 'DanceSteps1!';
+  assert.deepEqual(getPasswordRequirements('').map(({ met }) => met), [false, false, false, false]);
+  assert.deepEqual(getPasswordRequirements('DanceSteps1').map(({ met }) => met), [true, true, true, false]);
+  assert.ok(getPasswordRequirements(valid).every(({ met }) => met));
+  assert.equal(passwordEntryError(valid, valid), null);
+  assert.equal(passwordEntryError(valid, 'DanceSteps2!'), 'password-mismatch');
+  assert.equal(passwordEntryError(valid, null), 'password-mismatch');
+  assert.ok(new RegExp(`^(?:${passwordPattern})$`, 'v').test(valid));
+  for (const password of ['dancesteps1!', 'DanceSteps!', 'DanceSteps1', 'DanceSteps1 ', 'Aa1!', valid + '\n', valid.repeat(12)]) {
+    assert.equal(meetsPasswordPolicy(password), false, password);
+    assert.equal(passwordEntryError(password, password), 'weak-password');
   }
 });
 
@@ -78,7 +94,13 @@ test('email signup requires mailbox verification and valid credentials can resen
     database,
     baseURL: origin,
     secret: randomBytes(32).toString('base64'),
-    emailAndPassword: { enabled: true, requireEmailVerification: true },
+    emailAndPassword: {
+      enabled: true,
+      requireEmailVerification: true,
+      resetPasswordTokenExpiresIn: passwordResetExpiresIn,
+      revokeSessionsOnPasswordReset: true,
+      sendResetPassword: ({ user, url }) => sendPasswordResetEmail(user.email, url),
+    },
     emailVerification: emailVerificationOptions,
     rateLimit: { enabled: false },
   };
@@ -107,5 +129,30 @@ test('email signup requires mailbox verification and valid credentials can resen
   assert.equal(verified.headers.get('location'), '/sign-in?verification=confirmed');
   const login = await signIn();
   assert.equal(login.status, 200);
-  assert.ok(login.headers.getSetCookie().some((cookie) => cookie.includes('session_token')));
+  const sessionCookie = login.headers.getSetCookie().find((cookie) => cookie.includes('session_token')).split(';')[0];
+  assert.ok(await auth.api.getSession({ headers: new Headers({ cookie: sessionCookie }) }));
+
+  const requestReset = (email) => callEmailAuth(auth.handler, request, '/api/auth/request-password-reset', { email, redirectTo: '/reset-password' });
+  const missing = await requestReset('unknown@example.com');
+  assert.equal(missing.status, 200);
+  assert.equal(deliveries.length, 2);
+  const requested = await requestReset(credentials.email);
+  assert.equal(requested.status, 200);
+  assert.deepEqual(await requested.json(), await missing.json());
+  assert.equal(deliveries.length, 3);
+  const resetLink = new URL(deliveries[2].text.split('\n\n')[1]);
+  assert.equal(resetLink.origin, origin);
+  const callback = await auth.handler(new Request(resetLink));
+  assert.equal(callback.status, 302);
+  const resetFormUrl = new URL(callback.headers.get('location'), origin);
+  assert.equal(resetFormUrl.pathname, '/reset-password');
+  const token = resetFormUrl.searchParams.get('token');
+  assert.ok(token);
+  const newPassword = 'New-Dance-Pass1!';
+  const reset = () => callEmailAuth(auth.handler, request, '/api/auth/reset-password', { token, newPassword });
+  assert.equal((await reset()).status, 200);
+  assert.equal(await auth.api.getSession({ headers: new Headers({ cookie: sessionCookie }) }), null);
+  assert.equal((await reset()).status, 400);
+  assert.equal((await signIn()).status, 401);
+  assert.equal((await signIn({ ...credentials, password: newPassword })).status, 200);
 });

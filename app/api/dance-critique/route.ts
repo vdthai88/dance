@@ -17,9 +17,9 @@ import { attachSessionCritique, attachSessionVideo } from "../../lib/session-sto
 import { saveLocalVideo } from "../../lib/video-storage";
 import { isUploadedVideo, MAX_VIDEO_BYTES, readVideoUpload, VideoUploadError } from "../../lib/video-upload";
 import type { UploadedVideo, VideoUpload } from "../../lib/video-upload";
-import { DANCER_DETECTION_PROMPT, dancerDetectionSchema, isDancerDetection, needsDancerConfirmation } from "../../lib/dancer-selection";
+import { DANCER_DETECTION_PROMPT, dancerDetectionSchema, isDancerDetection, needsDancerConfirmation, automaticDancer } from "../../lib/dancer-selection";
 import type { DancerChoiceRequest } from "../../lib/dancer-selection";
-import { getPgDancerSelection, savePgDancerDetection } from "../../lib/postgres-dancer-store";
+import { getPgDancerSelection, savePgDancerDetection, selectPgDancer } from "../../lib/postgres-dancer-store";
 
 export const runtime = "nodejs";
 export const maxDuration = 600;
@@ -321,7 +321,7 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
     const choices: DancerChoiceRequest[] = [];
     const subjects: Awaited<ReturnType<typeof getPgDancerSelection>>[] = [];
     for (const [index, video] of videos.entries()) {
-      const selection = await getPgDancerSelection(user.id, video.sha256);
+      let selection = await getPgDancerSelection(user.id, video.sha256);
       if (needsDancerConfirmation(selection.target, forceDancerChoice)) {
         let detection = selection.detection;
         if (!detection) {
@@ -339,7 +339,14 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
             : parsed;
           await savePgDancerDetection(user.id, video.sha256, detection);
         }
-        choices.push({ take: index === 0 ? "earlier" : "newer", detection });
+        const automatic = automaticDancer(detection, forceDancerChoice);
+        if (automatic) {
+          await selectPgDancer(user.id, video.sha256, automatic, true);
+          selection = await getPgDancerSelection(user.id, video.sha256);
+        }
+        if (needsDancerConfirmation(selection.target, forceDancerChoice)) {
+          choices.push({ take: index === 0 ? "earlier" : "newer", detection });
+        }
       }
       subjects.push(selection);
     }

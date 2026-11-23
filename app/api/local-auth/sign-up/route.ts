@@ -5,6 +5,7 @@ import { emailVerificationEnabled } from "../../../lib/auth-email";
 import { usesPostgres } from "../../../lib/database-driver";
 import { choosePgAccountRole } from "../../../lib/postgres-profile-store";
 import { chooseAccountRole } from "../../../lib/session-store";
+import { passwordEntryError } from "../../../lib/password-policy";
 
 function copyCookies(source: Response, target: NextResponse) {
   const headers = source.headers as Headers & { getSetCookie?: () => string[] };
@@ -21,9 +22,11 @@ export async function POST(request: Request) {
   // Next dev is bound to 0.0.0.0, but the browser's Origin is the actual
   // Wi-Fi address. Better Auth must validate that browser origin, not 0.0.0.0.
   const origin = request.headers.get("origin") || process.env.BETTER_AUTH_URL || new URL(request.url).origin;
-  if (!isValidEmailAddress(email) || password.length < 8 || password.length > 128) {
+  if (!isValidEmailAddress(email)) {
     return NextResponse.redirect(new URL("/sign-up?error=invalid-request", origin), { status: 303 });
   }
+  const passwordError = passwordEntryError(password, form.get("confirmPassword"));
+  if (passwordError) return NextResponse.redirect(new URL(`/sign-up?error=${passwordError}`, origin), { status: 303 });
   const authResponse = await callEmailAuth(auth.handler, request, "/api/auth/sign-up/email", { name, email, password });
   const payload = await authResponse.json().catch(() => null) as { user?: { id?: string } } | null;
   if (!authResponse.ok || !payload?.user?.id) {

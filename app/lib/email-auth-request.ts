@@ -1,4 +1,4 @@
-type EmailAuthPath = "/api/auth/sign-in/email" | "/api/auth/sign-up/email";
+type EmailAuthPath = "/api/auth/sign-in/email" | "/api/auth/sign-up/email" | "/api/auth/request-password-reset" | "/api/auth/reset-password";
 
 export function isValidEmailAddress(email: string) {
   const [local, domain, extra] = email.split("@");

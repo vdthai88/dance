@@ -43,6 +43,7 @@ export default function Home() {
   const [teacherCompanies, setTeacherCompanies] = useState<TeacherCompany[]>([]);
   const [activeTeacherCompanyId, setActiveTeacherCompanyId] = useState("");
   const [studentCompanies, setStudentCompanies] = useState<TeacherCompany[]>([]);
+  const [companyListRevision, setCompanyListRevision] = useState(0);
   const [activeStudentCompanyId, setActiveStudentCompanyId] = useState("");
   const [routeReady, setRouteReady] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -129,7 +130,7 @@ export default function Home() {
       setActiveTeacherCompanyId((current) => current && companies.some((company) => company.id === current) ? current : companies.find((company) => company.isDefault)?.id ?? companies[0]?.id ?? "");
     }).catch(() => { if (active) setTeacherCompanies([]); });
     return () => { active = false; };
-  }, []);
+  }, [activePage, companyListRevision]);
 
   useEffect(() => {
     let active = true;
@@ -140,7 +141,7 @@ export default function Home() {
       setActiveStudentCompanyId((current) => current && companies.some((company) => company.id === current) ? current : companies[0]?.id ?? "");
     }).catch(() => { if (active) setStudentCompanies([]); });
     return () => { active = false; };
-  }, []);
+  }, [activePage, companyListRevision]);
 
   async function openCoaching() {
     try {
@@ -398,13 +399,26 @@ export default function Home() {
 
   const activeCompanies = profile === "teacher" ? teacherCompanies : studentCompanies;
   const activeCompanyId = profile === "teacher" ? activeTeacherCompanyId : activeStudentCompanyId;
-  const activeCompany = activeCompanies.find((company) => company.id === activeCompanyId) ?? null;
+  const headerCompanies = activePage === "coaching" ? activeCompanies
+    : [...new Map([...studentCompanies, ...teacherCompanies].map((company) => [company.id, company])).values()];
+  const headerCompany = headerCompanies.find((company) => company.id === activeCompanyId)
+    ?? headerCompanies.find((company) => company.id === activeTeacherCompanyId || company.id === activeStudentCompanyId)
+    ?? headerCompanies[0];
   const aiFeedbackBusy = isCritiquing || savingVideos > 0 || isAutoAligning || (autoCritiquePending && !videoSaveError && (!comparisonFile || Boolean(alignmentSource)));
   const uploadModalMessage = uploadCheckMessage || videoSaveError;
 
   function changeActiveCompany(companyId: string) {
-    if (profile === "teacher") setActiveTeacherCompanyId(companyId);
-    else setActiveStudentCompanyId(companyId);
+    if (activePage === "coaching") {
+      if (profile === "teacher") setActiveTeacherCompanyId(companyId);
+      else setActiveStudentCompanyId(companyId);
+    } else {
+      const canTeach = teacherCompanies.some((company) => company.id === companyId);
+      const canStudy = studentCompanies.some((company) => company.id === companyId);
+      if (canTeach) setActiveTeacherCompanyId(companyId);
+      if (canStudy) setActiveStudentCompanyId(companyId);
+      if (canTeach && !canStudy) setProfile("teacher");
+      else if (canStudy && !canTeach) setProfile("student");
+    }
     setActiveSessionId(null);
   }
 
@@ -464,8 +478,14 @@ export default function Home() {
       <header className="topbar">
         <a className="brand brand-logo" href="#top" aria-label="One Dance home"><img src="/one_dance_logo.png?v=20261111" alt="One Dance" width={76} height={62} /></a>
         <p className="header-slogan">Every move has a <em>next step.</em></p>
-        {activeCompany && (activePage === "coaching" || (profile === "teacher" && activePage === "profile")) && <label className="current-studio">Current studio: {activeCompanies.length > 1 ? <select value={activeCompanyId} onChange={(event) => changeActiveCompany(event.target.value)} aria-label="Current studio">{activeCompanies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select> : <b>{activeCompany.name}</b>}</label>}
-        <AccountMenu />
+        <div className="header-account-controls">
+          {headerCompany && (headerCompanies.length > 1
+            ? <select className="header-company" value={headerCompany.id} onChange={(event) => changeActiveCompany(event.target.value)} aria-label="Current company" title={headerCompany.name}>
+                {headerCompanies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
+              </select>
+            : <span className="header-company" title={headerCompany.name}>{headerCompany.name}</span>)}
+          <AccountMenu />
+        </div>
       </header>
 
       {false && <section className="hero" id="top">
@@ -481,7 +501,29 @@ export default function Home() {
       {activePage === "replai" && <section className="workspace" id="studio">
         <div className="section-heading"><div><div className="eyebrow muted">THE STUDIO <span className="step-line"/> STEP 01</div><h2>Practice sessions</h2><p>Choose a student and session, then add coaching or videos.</p></div><div className="privacy"><span>{"\u2667"}</span> Your saved videos are private</div></div>
 
-        <section className="replai-intro"><div className="eyebrow muted">A PRACTICE, NOT A PERFORMANCE</div><h1>Small steps add up.</h1><div className="replai-steps"><article><span>01</span><h2>Choose your take</h2><p>Upload a solo practice video from your device.</p></article><article><span>02</span><h2>Notice the details</h2><p>Explore a sample report with moments and movement cues.</p></article><article><span>03</span><h2>Try it your way</h2><p>Keep what resonates. Your practice belongs to you.</p></article></div></section>
+        <section className="replai-intro">
+          <div className="replai-intro-heading">
+            <h1>Replai your moments.</h1>
+            <p className="replai-tagline">Small steps add up.</p>
+          </div>
+          <div className="replai-steps">
+            <article>
+              <span>01</span>
+              <h2>Upload a practice video</h2>
+              <p>Choose a video from your device and confirm which dancer you want Replai to focus on.</p>
+            </article>
+            <article>
+              <span>02</span>
+              <h2>Review your AI feedback</h2>
+              <p>Jump to specific moments in your video to see what worked and what to try next.</p>
+            </article>
+            <article>
+              <span>03</span>
+              <h2>Try again and compare</h2>
+              <p>Pick one thing to work on, then add a newer take to see what’s changed.</p>
+            </article>
+          </div>
+        </section>
 
         <VideoLibrary refreshKey={libraryRefreshKey} focusVideoId={focusedLibraryVideoId} onCompare={startLibraryComparison} onUpload={chooseFile} onReview={reviewLibraryVideo} pendingReview={activeLibraryVideoId && pendingReviewContent ? { videoId: activeLibraryVideoId, content: pendingReviewContent } : null} busy={isCritiquing || savingVideos > 0 || (autoCritiquePending && !videoSaveError)}>
         <p className="video-save-status" role="status">{savingVideos > 0 ? `Checking playback and saving ${savingVideos === 1 ? "your video" : "your videos"} to your library...` : "Uploaded videos are saved privately and automatically sent for AI feedback."}</p>
@@ -498,7 +540,7 @@ export default function Home() {
       </section>}
 
         {activePage === "coaching" && <section className="workspace coaching-workspace" id="studio"><div className="coaching-heading"><div className="eyebrow muted">COACHING</div><h1>{profile === "student" ? "Your coaching space." : "Guide every next step."}</h1><p>{profile === "student" ? "The current studio in the header filters the sessions you can review." : "The current studio in the header determines which students and sessions are shown."}</p></div><SessionPanel key={`${profile}-${activeCompanyId || "none"}`} role={profile} companyId={activeCompanyId || null} onRoleChange={setProfile} onSessionChange={(session) => setActiveSessionId(session?.id ?? null)} /><div id="coaching"><TeacherFeedbackPanel sessionId={activeSessionId} role={profile} /></div></section>}
-      {activePage === "profile" && <ProfilePage required={profileRequired} teacherCompanies={teacherCompanies} onDefaultStudio={async (companyId) => { const response = await fetch("/api/teacher-companies", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ companyId }) }); if (response.ok) { setTeacherCompanies((current) => current.map((company) => ({ ...company, isDefault: company.id === companyId }))); setActiveTeacherCompanyId(companyId); } }} onComplete={() => { setProfileRequired(false); }} />}
+      {activePage === "profile" && <ProfilePage required={profileRequired} teacherCompanies={teacherCompanies} onCompaniesChanged={() => setCompanyListRevision((revision) => revision + 1)} onDefaultStudio={async (companyId) => { const response = await fetch("/api/teacher-companies", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ companyId }) }); if (response.ok) { setTeacherCompanies((current) => current.map((company) => ({ ...company, isDefault: company.id === companyId }))); setActiveTeacherCompanyId(companyId); } }} onComplete={() => { setProfileRequired(false); }} />}
 
       <footer><a className="brand footer-brand" href="#top"><span className="brand-mark">o.</span><span>one</span></a><span>Practice with curiosity. {"\u2733"}</span><span><ReplaiName /> uploads are automatically sent for AI feedback.</span></footer>
     </main>

@@ -38,3 +38,9 @@ export function isDancerDetection(value: unknown): value is DancerDetection {
 export function needsDancerConfirmation(savedTarget: DancerTarget | null, chooseAgain: boolean): boolean {
   return chooseAgain || !savedTarget;
 }
+
+export function automaticDancer(detection: DancerDetection, chooseAgain: boolean): DancerTarget | null {
+  if (chooseAgain || detection.status !== "single" || detection.confidence !== "high" ||
+      detection.visiblePersonCount !== 1 || detection.candidates.length !== 1) return null;
+  return { description: detection.candidates[0].description, referenceSeconds: detection.referenceSeconds };
+}

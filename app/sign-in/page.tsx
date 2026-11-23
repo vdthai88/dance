@@ -19,13 +19,13 @@ function safeNext(value: string | undefined) {
   return value?.startsWith("/") && !value.startsWith("//") && !/[\\\s]/.test(value) ? value : "/";
 }
 
-export default async function SignInPage({ searchParams }: { searchParams: Promise<{ error?: string; next?: string; verification?: string }> }) {
+export default async function SignInPage({ searchParams }: { searchParams: Promise<{ error?: string; next?: string; verification?: string; password?: string }> }) {
   const params = await searchParams;
   const providers = enabledSocialProviders();
   const error = params.error ? (params.verification === "confirmed"
     ? "This verification link is invalid or expired. Sign in with your email and password to request a new link."
     : messages[params.error] || "We could not sign you in. Please try again.") : "";
-  const notice = !error && params.verification ? verificationMessages[params.verification] : "";
+  const notice = error ? "" : params.password === "reset" ? "Your password was reset. You can now sign in." : verificationMessages[params.verification ?? ""];
   return <main className="auth-page"><section className="auth-card" aria-labelledby="sign-in-title">
     <p className="eyebrow">ONE</p><h1 id="sign-in-title">Welcome back</h1><p className="auth-copy">Sign in to access your dance practice space.</p>
     {error && <p className="auth-error" role="alert">{error}</p>}
@@ -34,6 +34,7 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
       <input type="hidden" name="next" value={safeNext(params.next)} />
       <label>Email<input name="email" type="email" autoComplete="email" maxLength={320} required /></label>
       <PasswordField />
+      <p className="auth-switch"><Link href="/forgot-password">Forgot password?</Link></p>
       <button type="submit">Sign in</button>
     </form>
     <SocialAuthButtons providers={providers} mode="sign-in" />

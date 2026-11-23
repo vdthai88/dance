@@ -2,10 +2,12 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { betterAuth } from "better-auth";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { getPostgresPool } from "../../db/postgres";
 import { usesPostgres } from "./database-driver";
 import { configuredSocialProviders } from "./social-auth";
-import { emailVerificationEnabled, emailVerificationOptions } from "./auth-email";
+import { emailVerificationEnabled, emailVerificationOptions, passwordResetExpiresIn, sendPasswordResetEmail } from "./auth-email";
+import { meetsPasswordPolicy, passwordGuidance } from "./password-policy";
 
 const databasePath = process.env.DANCE_DATABASE_PATH || join(process.cwd(), "data", "dance.sqlite");
 const localAllowedHosts = (process.env.BETTER_AUTH_ALLOWED_HOSTS || "localhost:*,127.0.0.1:*,192.168.86.162:*")
@@ -31,6 +33,27 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     requireEmailVerification: emailVerificationEnabled,
+    resetPasswordTokenExpiresIn: passwordResetExpiresIn,
+    revokeSessionsOnPasswordReset: true,
+    sendResetPassword: emailVerificationEnabled ? async ({ user, url }): Promise<void> => {
+      try {
+        const { internalAdapter } = await auth.$context;
+        const accounts = await internalAdapter.findAccounts(user.id);
+        if (accounts.some((account) => account.providerId === "credential" && account.password)) {
+          await sendPasswordResetEmail(user.email, url);
+        }
+      } catch (error) {
+        console.error("Password reset email failed:", error instanceof Error ? error.message : "Unknown delivery error");
+      }
+    } : undefined,
+  },
+  hooks: {
+    before: createAuthMiddleware(async (ctx) => {
+      const field = ctx.path === "/sign-up/email" ? "password" : ctx.path === "/reset-password" ? "newPassword" : null;
+      if (field && !meetsPasswordPolicy(ctx.body?.[field])) {
+        throw new APIError("BAD_REQUEST", { code: "WEAK_PASSWORD", message: passwordGuidance });
+      }
+    }),
   },
   emailVerification: emailVerificationEnabled ? emailVerificationOptions : undefined,
   socialProviders: configuredSocialProviders(),
@@ -50,6 +73,8 @@ export const auth = betterAuth({
       "/sign-in/email": { window: 60, max: 8 },
       "/sign-up/email": { window: 60 * 60, max: 8 },
       "/send-verification-email": { window: 60, max: 3 },
+      "/request-password-reset": { window: 60, max: 3 },
+      "/reset-password": { window: 60, max: 8 },
     },
   },
 });
