@@ -1,22 +1,22 @@
 import { randomUUID } from "node:crypto";
+import type { PoolClient } from "pg";
 import { getPostgresPool } from "../../db/postgres";
 import type { LocalTeacherProfile, StudentCompany, TeacherOrganization, UserProfile } from "./session-store";
 
 type AccountRole = "student" | "teacher" | "admin";
 
-async function studentDisplayName(userId: string) {
-  const pool = getPostgresPool();
+async function studentDisplayName(userId: string, pool: Pick<PoolClient, "query"> = getPostgresPool()) {
   const { rows } = await pool.query(`SELECT up.first_name, up.last_name, u.name
     FROM "user" u LEFT JOIN user_profiles up ON up.user_id = u.id WHERE u.id = $1`, [userId]);
   const row = rows[0] as { first_name: string | null; last_name: string | null; name: string } | undefined;
   return [row?.first_name, row?.last_name].filter(Boolean).join(" ").trim() || row?.name?.trim() || "Student";
 }
 
-export async function ensurePgStudentProfile(userId: string) {
-  const pool = getPostgresPool();
+export async function ensurePgStudentProfile(userId: string, client?: PoolClient) {
+  const pool = client ?? getPostgresPool();
   const existing = await pool.query("SELECT id FROM students WHERE user_id = $1", [userId]);
   if (existing.rowCount) return existing.rows[0].id as string;
-  const baseName = await studentDisplayName(userId);
+  const baseName = await studentDisplayName(userId, pool);
   const conflict = await pool.query("SELECT 1 FROM students WHERE lower(display_name) = lower($1) AND user_id IS DISTINCT FROM $2", [baseName, userId]);
   const name = conflict.rowCount ? `${baseName} (${userId.slice(0, 6)})` : baseName;
   const id = randomUUID();

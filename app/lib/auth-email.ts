@@ -1,4 +1,5 @@
 import { APIError } from "better-auth/api";
+import { rosterInviteTokenFromPath } from "./roster-invite-links";
 
 export const emailVerificationEnabled = Boolean(
   process.env.RESEND_API_KEY?.trim() || process.env.AUTH_EMAIL_FROM?.trim() ||
@@ -27,6 +28,16 @@ async function sendAuthMessage(to: string, subject: string, text: string, localL
 
 export const passwordResetExpiresIn = 60 * 60;
 
+export async function sendRosterInviteEmail(to: string, url: string, teacherName: string, studioName: string) {
+  await sendAuthMessage(
+    to,
+    "A teacher invited you to The One Dance",
+    `${teacherName} invited you to connect as a student at ${studioName}. Open this link to sign in or create your account and review the invitation. The link expires in seven days.\n\n${url}\n\nIf you weren't expecting this invitation, you can ignore it.`,
+    "Local student roster invitation link:",
+    url,
+  );
+}
+
 export async function sendPasswordResetEmail(to: string, url: string) {
   await sendAuthMessage(
     to,
@@ -43,12 +54,17 @@ export const emailVerificationOptions = {
   expiresIn: 60 * 60,
   async sendVerificationEmail({ user, url }: { user: { email: string }; url: string }) {
     const link = new URL(url);
-    link.searchParams.set("callbackURL", verificationCallback);
+    const requestedCallback = link.searchParams.get("callbackURL");
+    const next = requestedCallback?.startsWith("/sign-in?") ? new URL(requestedCallback, link.origin).searchParams.get("next") : null;
+    const callback = rosterInviteTokenFromPath(next)
+      ? `${verificationCallback}&${new URLSearchParams({ next: next! })}`
+      : verificationCallback;
+    link.searchParams.set("callbackURL", callback);
     try {
       await sendAuthMessage(
         user.email,
-        "Verify your One Dance email address",
-        `Open this link within 1 hour to verify your email address for One Dance:\n\n${link}\n\nIf you did not request this email, you can ignore it.`,
+        "Verify your email address for The One Dance",
+        `Open this link within 1 hour to verify your email address for The One Dance:\n\n${link}\n\nIf you did not request this email, you can ignore it.`,
         "Local email verification link:",
         link.toString(),
       );

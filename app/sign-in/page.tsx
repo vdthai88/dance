@@ -3,6 +3,7 @@ import { SocialAuthButtons } from "../components/social-auth-buttons";
 import { PasswordField } from "../components/password-field";
 import { enabledSocialProviders } from "../lib/social-auth";
 import { stagingAccessEnabled, stagingAccessError, stagingAccessMessage } from "../lib/staging-access";
+import { rosterInviteTokenFromPath } from "../lib/roster-invite-links";
 
 const messages: Record<string, string> = {
   "invalid-credentials": "We could not sign you in with that email and password.",
@@ -25,6 +26,7 @@ function safeNext(value: string | undefined) {
 export default async function SignInPage({ searchParams }: { searchParams: Promise<{ error?: string; next?: string; verification?: string; password?: string }> }) {
   const params = await searchParams;
   const providers = enabledSocialProviders();
+  const invite = rosterInviteTokenFromPath(params.next);
   const error = params.error ? (params.verification === "confirmed"
     ? "This verification link is invalid or expired. Sign in with your email and password to request a new link."
     : messages[params.error] || "We could not sign you in. Please try again.") : "";
@@ -41,7 +43,7 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
       <p className="auth-switch"><Link href="/forgot-password">Forgot password?</Link></p>
       <button type="submit">Sign in</button>
     </form>
-    <SocialAuthButtons providers={providers} mode="sign-in" />
-    <p className="auth-switch">New to One? <Link href="/sign-up">Create an account</Link></p>
+    <SocialAuthButtons providers={providers} mode="sign-in" inviteNext={invite ? params.next : undefined} />
+    <p className="auth-switch">New to One? <Link href={invite ? `/sign-up?invite=${invite}` : "/sign-up"}>Create an account</Link></p>
   </section></main>;
 }

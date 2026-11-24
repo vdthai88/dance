@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { ConnectionPanel } from "./connection-panel";
 import { TeacherStudentsPanel } from "./teacher-students-panel";
+import { IncomingRosterInvites } from "./incoming-roster-invites";
 import { CompanyAssociationPanel } from "./company-association-panel";
 import { ProPreview } from "./pro-preview";
 import { ProfileSection } from "./profile-section";
@@ -118,8 +119,10 @@ export function ProfilePage({ required = false, onComplete, teacherCompanies = [
         </ul>
       </div>}
     </CompanyAssociationPanel>}
-    {canManageCompany && <TeacherStudentsPanel />}
+    {canManageCompany && <TeacherStudentsPanel studios={teacherCompanies} />}
+    {profile.roles && !isStudent && <IncomingRosterInvites separate onAccepted={() => { refreshProfile(); onCompaniesChanged?.(); }} />}
     {isStudent && <ProfileSection title="Your connections" className="company-form">
+      <IncomingRosterInvites onAccepted={() => { refreshProfile(); onCompaniesChanged?.(); }} />
       <div className="profile-wide"><p>{profile.companies?.length ? "You can belong to more than one studio or company." : "Request access to a teacher or company to connect."}</p>{profile.companies?.length ? <ul className="profile-company-list">{profile.companies?.map((company) => <li key={company.id}>{company.name} <small>{company.type.replace("_", " ")}</small></li>)}</ul> : null}</div>
       <div className="profile-wide"><ConnectionPanel role="student" /></div>
     </ProfileSection>}

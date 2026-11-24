@@ -7,6 +7,8 @@ import { choosePgAccountRole } from "../../../lib/postgres-profile-store";
 import { chooseAccountRole } from "../../../lib/session-store";
 import { passwordEntryError } from "../../../lib/password-policy";
 import { stagingAccessError } from "../../../lib/staging-access";
+import { findRosterInvite } from "../../../lib/postgres-roster-invite-store";
+import { isRosterInviteToken, rosterInvitePath } from "../../../lib/roster-invite-links";
 
 function copyCookies(source: Response, target: NextResponse) {
   const headers = source.headers as Headers & { getSetCookie?: () => string[] };
@@ -19,21 +21,32 @@ export async function POST(request: Request) {
   const email = typeof form.get("email") === "string" ? String(form.get("email")).trim().toLowerCase() : "";
   const password = typeof form.get("password") === "string" ? String(form.get("password")) : "";
   const name = email.trim().split("@")[0] || "One member";
-  const role = form.get("role") === "teacher" ? "teacher" : "student";
+  const token = form.get("rosterInvite");
+  const invitePath = rosterInvitePath(token);
+  const inviteParam: Record<string, string> = invitePath ? { invite: String(token) } : {};
+  const role = !invitePath && form.get("role") === "teacher" ? "teacher" : "student";
   // Next dev is bound to 0.0.0.0, but the browser's Origin is the actual
   // Wi-Fi address. Better Auth must validate that browser origin, not 0.0.0.0.
   const origin = request.headers.get("origin") || process.env.BETTER_AUTH_URL || new URL(request.url).origin;
+  const retry = (error: string) => NextResponse.redirect(new URL(`/sign-up?${new URLSearchParams({ error, ...inviteParam })}`, origin), { status: 303 });
+  if (isRosterInviteToken(token)) {
+    const invitation = usesPostgres() ? await findRosterInvite(token) : null;
+    if (!invitation || invitation.status !== "pending" || invitation.recipientId || invitation.email !== email || !emailVerificationEnabled) {
+      return NextResponse.redirect(new URL(invitePath!, origin), { status: 303 });
+    }
+  }
   if (!isValidEmailAddress(email)) {
-    return NextResponse.redirect(new URL("/sign-up?error=invalid-request", origin), { status: 303 });
+    return retry("invalid-request");
   }
   const passwordError = passwordEntryError(password, form.get("confirmPassword"));
-  if (passwordError) return NextResponse.redirect(new URL(`/sign-up?error=${passwordError}`, origin), { status: 303 });
-  const authResponse = await callEmailAuth(auth.handler, request, "/api/auth/sign-up/email", { name, email, password });
+  if (passwordError) return retry(passwordError);
+  const callbackURL = invitePath ? `/sign-in?${new URLSearchParams({ next: invitePath })}` : undefined;
+  const authResponse = await callEmailAuth(auth.handler, request, "/api/auth/sign-up/email", { name, email, password, callbackURL });
   const payload = await authResponse.json().catch(() => null) as { user?: { id?: string }; code?: string } | null;
   if (!authResponse.ok || !payload?.user?.id) {
-    if (payload?.code === stagingAccessError) return NextResponse.redirect(new URL("/sign-up?error=staging-access", origin), { status: 303 });
+    if (payload?.code === stagingAccessError) return retry("staging-access");
     const error = authResponse.status === 429 ? "rate-limited" : authResponse.status === 503 ? "verification-delivery" : "account-not-created";
-    return NextResponse.redirect(new URL(`/sign-up?error=${error}`, origin), { status: 303 });
+    return retry(error);
   }
   if (emailVerificationEnabled) {
     // Better Auth returns a synthetic ID for duplicate sign-ups. Only assign a
@@ -44,7 +57,8 @@ export async function POST(request: Request) {
       if (usesPostgres()) await choosePgAccountRole(created.id, role);
       else chooseAccountRole(created.id, role);
     }
-    return NextResponse.redirect(new URL("/sign-up/check-email", origin), { status: 303 });
+    const checkEmailPath = invitePath ? `/sign-up/check-email?${new URLSearchParams({ next: invitePath })}` : "/sign-up/check-email";
+    return NextResponse.redirect(new URL(checkEmailPath, origin), { status: 303 });
   }
   if (usesPostgres()) await choosePgAccountRole(payload.user.id, role);
   else chooseAccountRole(payload.user.id, role);

@@ -1,14 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { registerHooks } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { betterAuth } from 'better-auth';
 import { createAuthMiddleware } from 'better-auth/api';
 import { getMigrations } from 'better-auth/db/migration';
 import { callEmailAuth, isValidEmailAddress } from '../app/lib/email-auth-request.ts';
-import { emailVerificationOptions, passwordResetExpiresIn, sendPasswordResetEmail } from '../app/lib/auth-email.ts';
 import { getPasswordRequirements, meetsPasswordPolicy, passwordEntryError, passwordPattern } from '../app/lib/password-policy.ts';
 import { checkStagingEmailRequest, stagingAccessError, stagingDatabaseHooks, stagingEmailAllowed, stagingUserAllowed } from '../app/lib/staging-access.ts';
+
+const hook = registerHooks({ resolve(specifier, context, nextResolve) {
+  if (specifier === './roster-invite-links' && context.parentURL?.endsWith('/auth-email.ts')) {
+    return nextResolve(new URL('./roster-invite-links.ts', context.parentURL).href, context);
+  }
+  return nextResolve(specifier, context);
+} });
+const { emailVerificationOptions, passwordResetExpiresIn, sendPasswordResetEmail } = await import('../app/lib/auth-email.ts');
+hook.deregister();
 
 test('email address validation accepts aliases and rejects malformed addresses', () => {
   assert.ok(isValidEmailAddress('dancer+practice@example.com'));
@@ -211,4 +220,15 @@ test('email signup requires mailbox verification and valid credentials can resen
   assert.equal((await reset()).status, 400);
   assert.equal((await signIn()).status, 401);
   assert.equal((await signIn({ ...credentials, password: newPassword })).status, 200);
+
+  const invitePath = `/roster-invites/${randomBytes(32).toString('base64url')}`;
+  const callbackURL = `/sign-in?${new URLSearchParams({ next: invitePath })}`;
+  const invited = { name: 'Invited Student', email: 'invited@example.com', password: newPassword, callbackURL };
+  assert.equal((await callEmailAuth(auth.handler, request, '/api/auth/sign-up/email', invited)).status, 200);
+  const inviteVerification = new URL(deliveries.at(-1).text.split('\n\n')[1]);
+  const verificationResponse = await auth.handler(new Request(inviteVerification));
+  const inviteReturn = new URL(verificationResponse.headers.get('location'), origin);
+  assert.equal(inviteReturn.pathname, '/sign-in');
+  assert.equal(inviteReturn.searchParams.get('next'), invitePath);
+  assert.equal((await signIn(invited)).status, 200);
 });

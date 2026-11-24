@@ -3,12 +3,13 @@
 import { useState } from "react";
 import { authClient } from "../lib/auth-client";
 import type { SocialProvider, SocialProviderId } from "../lib/social-auth";
+import { rosterInviteContinuationKey, rosterInviteTokenFromPath } from "../lib/roster-invite-links";
 
-type Props = { providers: SocialProvider[]; mode: "sign-in" | "sign-up" };
+type Props = { providers: SocialProvider[]; mode: "sign-in" | "sign-up"; inviteNext?: string };
 
 function icon(id: SocialProviderId) { return id === "google" ? "G" : id === "apple" ? "●" : "f"; }
 
-export function SocialAuthButtons({ providers, mode }: Props) {
+export function SocialAuthButtons({ providers, mode, inviteNext }: Props) {
   const [working, setWorking] = useState<SocialProviderId | null>(null);
   const [error, setError] = useState("");
   if (providers.length === 0) return null;
@@ -21,7 +22,14 @@ export function SocialAuthButtons({ providers, mode }: Props) {
       const selectedRole = document.querySelector<HTMLInputElement>('input[name="role"]:checked')?.value;
       callback.searchParams.set("role", selectedRole === "teacher" ? "teacher" : "student");
     }
-    const result = await authClient.signIn.social({ provider, callbackURL: `${callback.pathname}${callback.search}`, requestSignUp: mode === "sign-up" });
+    const invitation = rosterInviteTokenFromPath(inviteNext);
+    if (invitation) {
+      try { sessionStorage.setItem(rosterInviteContinuationKey, invitation); }
+      catch { /* Manual acceptance is available when browser storage is disabled. */ }
+    }
+    const callbackURL = invitation ? inviteNext! : `${callback.pathname}${callback.search}`;
+    const errorCallbackURL = invitation ? `/sign-in?${new URLSearchParams({ next: inviteNext! })}` : undefined;
+    const result = await authClient.signIn.social({ provider, callbackURL, errorCallbackURL, requestSignUp: mode === "sign-up" });
     if (result.error) {
       setError(result.error.message || `We could not continue with ${provider}.`);
       setWorking(null);
