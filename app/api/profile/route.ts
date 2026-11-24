@@ -23,7 +23,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ ...getUserProfile(user.id), email: user.email, roles: getAccountRoles(user.id), companies: listUserCompanies(user.id) });
   } catch (error) {
     console.error("Could not load profile:", error);
-    return NextResponse.json({ error: "Your profile could not be loaded. Restart the development server, then try again." }, { status: 500 });
+    return NextResponse.json({ error: "Your profile could not be loaded. Please try again." }, { status: 500 });
   }
 }
 
@@ -44,6 +44,6 @@ export async function PUT(request: Request) {
     return NextResponse.json(usesPostgres() ? await savePgUserProfile(user.id, profile) : saveUserProfile(user.id, profile));
   } catch (error) {
     console.error("Could not save profile:", error);
-    return NextResponse.json({ error: "Your profile could not be saved. Restart the development server, then try again." }, { status: 500 });
+    return NextResponse.json({ error: "Your profile could not be saved. Please try again." }, { status: 500 });
   }
 }

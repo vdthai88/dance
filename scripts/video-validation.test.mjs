@@ -52,7 +52,7 @@ test('both upload APIs reject before storage or database saves and clean tempora
   }
 });
 
-test('fully decodes good video, rejects corrupt/truncated and audio-only uploads without changing source files', async () => {
+test('scans and samples good video, rejects corrupt/truncated and audio-only uploads without changing source files', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'one-dance-validation-test-'));
   const good = join(dir, 'good.mp4');
   try {

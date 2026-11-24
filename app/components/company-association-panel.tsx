@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { readApiJson } from "../lib/api-response";
 import { ProfileSection } from "./profile-section";
 
 type CompanyType = "studio" | "private_company" | "other";
@@ -19,8 +20,8 @@ function OwnedCompanyForm({ company, onSaved }: { company: Company; onSaved: (co
     event.preventDefault(); setSaving(true); setMessage("");
     try {
       const response = await fetch(`/api/companies/${encodeURIComponent(company.id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim(), type, address: address.trim(), phoneNumber: phoneNumber.trim() }) });
-      const data = await response.json() as { company?: Company; error?: string };
-      if (!response.ok || !data.company) throw new Error(data.error || "Could not update the company.");
+      const data = await readApiJson(response, "Save company", "Could not update the company.") as { company?: Company };
+      if (!data.company) throw new Error("The company update could not be confirmed. Refresh the page to check.");
       onSaved(data.company); setMessage("Saved.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not update the company."); }
     finally { setSaving(false); }
@@ -49,14 +50,17 @@ export function CompanyAssociationPanel({ onChanged, children }: { onChanged?: (
   const [saving, setSaving] = useState(false);
 
   async function load() {
-    const [companyResponse, requestResponse, ownedResponse] = await Promise.all([fetch("/api/companies", { cache: "no-store" }), fetch("/api/company-join-requests", { cache: "no-store" }), fetch("/api/companies?owned=true", { cache: "no-store" })]);
-    const companyData = await companyResponse.json() as Company[] | { error?: string };
-    const requestData = await requestResponse.json() as JoinRequest[] | { error?: string };
-    const ownedData = await ownedResponse.json() as Company[] | { error?: string };
-    if (!companyResponse.ok) throw new Error("Could not load companies.");
-    if (!requestResponse.ok) throw new Error("Could not load company requests.");
-    if (!ownedResponse.ok) throw new Error("Could not load your companies.");
-    setCompanies(companyData as Company[]); setRequests(requestData as JoinRequest[]); setOwnedCompanies(ownedData as Company[]);
+    await Promise.all([
+      fetch("/api/companies", { cache: "no-store" })
+        .then((response) => readApiJson(response, "Company list", "Could not load companies."))
+        .then((data) => setCompanies(data as Company[])),
+      fetch("/api/company-join-requests", { cache: "no-store" })
+        .then((response) => readApiJson(response, "Company requests", "Could not load company requests."))
+        .then((data) => setRequests(data as JoinRequest[])),
+      fetch("/api/companies?owned=true", { cache: "no-store" })
+        .then((response) => readApiJson(response, "Your companies", "Could not load your companies."))
+        .then((data) => setOwnedCompanies(data as Company[])),
+    ]);
   }
 
   useEffect(() => {
@@ -69,9 +73,14 @@ export function CompanyAssociationPanel({ onChanged, children }: { onChanged?: (
     setSaving(true); setMessage("");
     try {
       const response = await fetch("/api/companies", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim(), type, address: address.trim(), phoneNumber: phoneNumber.trim() }) });
-      const data = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(data.error || "Could not create the company.");
-      setName(""); setAddress(""); setPhoneNumber(""); setMessage("Company created. You are its Owner."); await load(); onChanged?.();
+      const { company } = await readApiJson(response, "Create company", "Could not confirm company creation. Refresh your profile to check before trying again.") as { company?: Company };
+      if (!company) throw new Error("Company creation could not be confirmed. Refresh your profile to check before trying again.");
+      setOwnedCompanies((current) => [...current.filter(({ id }) => id !== company.id), company].sort((a, b) => a.name.localeCompare(b.name)));
+      setName(""); setAddress(""); setPhoneNumber("");
+      setMessage("Company created. You are its Owner.");
+      onChanged?.();
+      try { await load(); }
+      catch { setMessage("Company created. Refresh your profile to update the company lists."); }
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not create the company."); }
     finally { setSaving(false); }
   }
@@ -81,8 +90,7 @@ export function CompanyAssociationPanel({ onChanged, children }: { onChanged?: (
     setSaving(true); setMessage("");
     try {
       const response = await fetch("/api/company-join-requests", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ companyId }) });
-      const data = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(data.error || "Could not send the join request.");
+      await readApiJson(response, "Join company", "Could not send the join request.");
       setCompanyId(""); setMessage("Join request sent. A company Owner or Admin must approve it.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not send the join request."); }
     finally { setSaving(false); }
@@ -92,9 +100,9 @@ export function CompanyAssociationPanel({ onChanged, children }: { onChanged?: (
     setSaving(true); setMessage("");
     try {
       const response = await fetch(`/api/company-join-requests/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accept }) });
-      const data = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(data.error || "Could not update the join request.");
-      setMessage(accept ? "Teacher joined the company." : "Join request declined."); await load(); onChanged?.();
+      await readApiJson(response, "Company join request", "Could not update the join request.");
+      setRequests((current) => current.filter((request) => request.id !== id));
+      setMessage(accept ? "Teacher joined the company." : "Join request declined."); onChanged?.();
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not update the join request."); }
     finally { setSaving(false); }
   }

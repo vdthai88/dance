@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { readApiJson } from "../lib/api-response";
 
 type Option = { type: "teacher" | "company"; id: string; name: string; companyName: string | null };
 type RequestItem = { id: string; studentName: string; targetName: string; targetType: "teacher" | "company"; requestedAt: string };
@@ -13,19 +14,36 @@ export function ConnectionPanel({ role, onAccepted }: { role: "student" | "teach
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const load = useCallback(async () => {
     if (role === "student") {
-      const [optionResponse, pendingResponse] = await Promise.all([fetch("/api/connections", { cache: "no-store" }), fetch("/api/connections?pending=student", { cache: "no-store" })]);
-      const optionData = await optionResponse.json() as Option[] | { error?: string };
-      const pendingData = await pendingResponse.json() as RequestItem[] | { error?: string };
-      if (!optionResponse.ok) throw new Error("error" in optionData && optionData.error ? optionData.error : "Could not load connection options.");
-      if (!pendingResponse.ok) throw new Error("error" in pendingData && pendingData.error ? pendingData.error : "Could not load pending requests.");
+      const [optionData, pendingData] = await Promise.all([
+        fetch("/api/connections", { cache: "no-store" }).then((response) => readApiJson(response, "Connections", "Could not load connection options.")),
+        fetch("/api/connections?pending=student", { cache: "no-store" }).then((response) => readApiJson(response, "Pending requests", "Could not load pending requests.")),
+      ]);
       setOptions(optionData as Option[]); setPending(pendingData as RequestItem[]); return;
     }
-    const response = await fetch("/api/connections?pending=true", { cache: "no-store" }); const data = await response.json() as RequestItem[] | { error?: string };
-    if (!response.ok) throw new Error("error" in data && data.error ? data.error : "Could not load requests."); setPending(data as RequestItem[]);
+    const response = await fetch("/api/connections?pending=true", { cache: "no-store" });
+    setPending(await readApiJson(response, "Student requests", "Could not load student connection requests.") as RequestItem[]);
   }, [role]);
   useEffect(() => { const timer = window.setTimeout(() => { void load().catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Could not load connections.")); }, 0); return () => window.clearTimeout(timer); }, [load]);
-  async function request() { if (!target) return; const [type, targetId] = target.split(":"); const response = await fetch("/api/connections", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type, targetId }) }); const data = await response.json() as { error?: string }; setMessage(response.ok ? "Request sent for approval." : data.error || "Could not send request."); if (response.ok) { setTarget(""); void load(); } }
-  async function decide(id: string, accept: boolean) { const response = await fetch(`/api/connections/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accept }) }); const data = await response.json() as { error?: string }; setMessage(response.ok ? (accept ? "Student connected." : "Request declined.") : data.error || "Could not update request."); if (response.ok) { void load(); if (accept) onAccepted?.(); } }
+  async function request() {
+    if (!target) return;
+    const [type, targetId] = target.split(":");
+    try {
+      const response = await fetch("/api/connections", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type, targetId }) });
+      await readApiJson(response, "Send connection request", "Could not confirm that the request was sent.");
+      setTarget("");
+      setMessage("Request sent for approval.");
+      try { await load(); } catch { setMessage("Request sent. Refresh your profile to update pending requests."); }
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Could not send request."); }
+  }
+  async function decide(id: string, accept: boolean) {
+    try {
+      const response = await fetch(`/api/connections/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accept }) });
+      await readApiJson(response, "Update connection request", "Could not update the connection request.");
+      setPending((current) => current.filter((item) => item.id !== id));
+      setMessage(accept ? "Student connected." : "Request declined.");
+      if (accept) onAccepted?.();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Could not update request."); }
+  }
   async function cancelRequest(id: string) { setCancellingId(id); setMessage(""); try { const response = await fetch(`/api/connections/${id}`, { method: "DELETE" }); if (!response.ok) { const data = await response.json().catch(() => null) as { error?: string } | null; throw new Error(data?.error || "Could not cancel this request."); } setPending((current) => current.filter((item) => item.id !== id)); setMessage("Request cancelled."); } catch (error) { setMessage(error instanceof Error ? error.message : "Could not cancel this request."); } finally { setCancellingId(null); } }
   const teachers = options.filter((option) => option.type === "teacher");
   const companies = options.filter((option) => option.type === "company");

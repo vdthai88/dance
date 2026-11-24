@@ -26,3 +26,10 @@ test('does not expose a proxy HTML response', async () => {
 test('rejects malformed JSON even with a successful HTTP status', async () => {
   await assert.rejects(readApiJson(new Response('{'), 'Critique'), /non-JSON response \(HTTP 200\)/);
 });
+
+test('profile and company requests report their own operation when a response has no data', async () => {
+  await assert.rejects(readApiJson(new Response(null, { status: 502 }), 'Create company', 'Could not confirm company creation.'), {
+    message: 'Could not confirm company creation. (HTTP 502)',
+  });
+  await assert.rejects(readApiJson(Response.json(null), 'Profile', 'Could not load your profile.'), /Could not load your profile/);
+});

@@ -16,6 +16,9 @@ try {
   const ownership = await pool.query(`SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'critiques' AND column_name = 'owner_user_id'`);
   if (!ownership.rowCount) throw new Error("Missing critique account ownership. Run db:migrate to apply 0006_account_owned_critiques.sql.");
+  const companyContact = await pool.query(`SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'organizations' AND column_name IN ('address', 'phone_number')`);
+  if (companyContact.rowCount !== 2) throw new Error("Missing company contact columns. Check that 0010_company_contact_details.sql was applied to this database.");
   console.log("PostgreSQL schema validation passed.");
 } finally {
   await pool.end();
