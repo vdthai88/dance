@@ -8,7 +8,8 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 
-export const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
+import { LEGACY_CRITIQUE_BYTES, LEGACY_VIDEO_MB, MAX_VIDEO_BYTES } from "./video-upload-limits";
+export { MAX_VIDEO_BYTES } from "./video-upload-limits";
 
 export class VideoUploadError extends Error {
   status: number;
@@ -24,6 +25,7 @@ export type UploadedVideo = {
   size: number;
   path: string;
   sha256: string;
+  stagedKey?: string;
   stream: () => ReadableStream<Uint8Array>;
 };
 
@@ -76,7 +78,10 @@ export async function readVideoUpload(request: Request, fileFields = ["video", "
       const measure = new Transform({ transform(chunk: Buffer, _encoding, callback) {
         size += chunk.length;
         totalFileBytes += chunk.length;
-        if (totalFileBytes > maxBytes) return callback(new VideoUploadError("Video uploads support up to 250 MB total. Try smaller clips.", 413));
+        if (totalFileBytes > maxBytes) {
+          const limit = maxBytes === LEGACY_CRITIQUE_BYTES ? LEGACY_VIDEO_MB : Math.floor(maxBytes / 1_000_000);
+          return callback(new VideoUploadError(`Video uploads support up to ${limit} MB total. Try smaller clips.`, 413));
+        }
         hash.update(chunk);
         callback(null, chunk);
       } });

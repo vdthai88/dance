@@ -32,7 +32,8 @@ test('both upload APIs reject before storage or database saves and clean tempora
     const dependencies = {
       [prefix + 'auth-session']: { getAuthenticatedUser: async () => ({ id: 'user' }) },
       [prefix + 'database-driver']: { usesPostgres: () => true },
-      [prefix + 'video-upload']: { ...uploadModule, readVideoUpload: async () => ({ get: (name) => name === 'video' ? file : null, cleanup: async () => { cleanups++; } }) },
+      [prefix + 'video-upload']: uploadModule,
+      [prefix + 'direct-video-storage']: { readVideoSubmission: async () => ({ get: (name) => name === 'video' ? file : null, cleanup: async () => { cleanups++; } }) },
       [prefix + 'video-validation']: { validateUploadedVideo: async () => { throw new uploadModule.VideoUploadError('Damaged video; not saved.', 422); } },
       [prefix + 'video-storage']: { saveLocalVideo: async () => { writes++; }, deleteLocalVideo: async () => {} },
       [prefix + 'video-library-store']: { findDuplicatePersonalVideo: async () => null, savePersonalVideo: async () => { writes++; } },

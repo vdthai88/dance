@@ -13,13 +13,16 @@ type Props = {
   focusVideoId?: string | null;
   onCritiquesDeleted?: () => void;
   onCompare?: (video: LibraryVideo, file: File) => Promise<void>;
+  onCompareSaved?: (earlier: LibraryVideo, newer: LibraryVideo) => void;
   onUpload?: (file: File, groupId: string) => void;
   onReview?: (video: LibraryVideo, chooseDancer: boolean) => Promise<void>;
   children?: ReactNode;
   pendingReview?: { videoId: string; content: ReactNode } | null;
 };
 
-export function VideoLibrary({ refreshKey, busy = false, focusVideoId, onCritiquesDeleted, onCompare, onUpload, onReview, children, pendingReview }: Props) {
+export function VideoLibrary({ refreshKey, busy = false, focusVideoId, onCritiquesDeleted, onCompare, onCompareSaved, onUpload, onReview, children, pendingReview }: Props) {
+  const [earlierId, setEarlierId] = useState("");
+  const [newerId, setNewerId] = useState("");
   const [videos, setVideos] = useState<LibraryVideo[]>([]);
   const [groups, setGroups] = useState<VideoGroup[]>([]);
   const [loading, setLoading] = useState(true);
@@ -183,9 +186,29 @@ export function VideoLibrary({ refreshKey, busy = false, focusVideoId, onCritiqu
 
   const ungrouped = videos.filter((video) => !video.groupId || !groups.some((group) => group.id === video.groupId));
   const displayedGroups = [...groups, ...ungrouped.map((video) => ({ id: "ungrouped:" + video.id, name: video.filename.slice(0, 100), collapsed: false }))];
+  const availableVideos = videos.filter((video) => video.available);
+  const earlier = availableVideos.find((video) => video.id === earlierId);
+  const newer = availableVideos.find((video) => video.id === newerId);
   return <section className="video-library" aria-labelledby="video-library-heading">
     <div className="video-library-heading"><div><h2 id="video-library-heading"><ReplaiName /> Video Library</h2><p>Saved videos, AI critiques, and comparisons. Organize your latest 100 uploads into groups.</p></div><button className="toggle-button" type="button" disabled={loading || deletingId !== null} onClick={() => { void load(); }}>{loading ? "Loading..." : "Refresh list"}</button></div>
     {children && <div className="library-upload-area">{children}</div>}
+    {onCompareSaved && availableVideos.length >= 2 && <details className="library-group">
+      <summary>Compare saved videos</summary>
+      <form className="inline-form" onSubmit={(event) => {
+        event.preventDefault();
+        if (earlier && newer && earlier.id !== newer.id) onCompareSaved(earlier, newer);
+      }}>
+        <label>Earlier take<select value={earlierId} onChange={(event) => setEarlierId(event.target.value)} disabled={busy} required>
+          <option value="">Choose an earlier video</option>
+          {availableVideos.map((video) => <option key={video.id} value={video.id} disabled={video.id === newerId}>{video.filename}</option>)}
+        </select></label>
+        <label>Newer take<select value={newerId} onChange={(event) => setNewerId(event.target.value)} disabled={busy} required>
+          <option value="">Choose a newer video</option>
+          {availableVideos.map((video) => <option key={video.id} value={video.id} disabled={video.id === earlierId}>{video.filename}</option>)}
+        </select></label>
+        <button className="button button-dark" type="submit" disabled={busy || !earlier || !newer || earlier.id === newer.id}>Compare</button>
+      </form>
+    </details>}
     {error && <p className="video-library-error" role="alert">{error}</p>}
     {message && <p className="video-library-message" role="status">{message}</p>}
     {!loading && !error && videos.length === 0 && <p className="video-library-empty">No saved videos yet. Choose a video above to add it to your library.</p>}

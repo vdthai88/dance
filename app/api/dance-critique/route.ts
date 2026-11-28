@@ -14,8 +14,10 @@ import { findCritiqueForVideo, makeCritiqueKey, saveCritique } from "../../lib/c
 import { attachPgSessionCritique, findPgCritique, findPgCritiqueForVideo, savePgCritique } from "../../lib/postgres-critique-store";
 import { getPgSessionVideoStorageContext, pgCanAccessSession, savePgSessionVideo } from "../../lib/postgres-session-store";
 import { attachSessionCritique, attachSessionVideo } from "../../lib/session-store";
-import { saveLocalVideo } from "../../lib/video-storage";
-import { isUploadedVideo, MAX_VIDEO_BYTES, readVideoUpload, VideoUploadError } from "../../lib/video-upload";
+import { saveLocalVideo, streamLocalVideo } from "../../lib/video-storage";
+import { isUploadedVideo, readVideoUpload, VideoUploadError } from "../../lib/video-upload";
+import { LEGACY_CRITIQUE_BYTES, MAX_VIDEO_BYTES, MAX_VIDEO_MB } from "../../lib/video-upload-limits";
+import { findLibraryVideo } from "../../lib/video-library-store";
 import type { UploadedVideo, VideoUpload } from "../../lib/video-upload";
 import { DANCER_DETECTION_PROMPT, dancerDetectionSchema, isDancerDetection, needsDancerConfirmation, automaticDancer } from "../../lib/dancer-selection";
 import type { DancerChoiceRequest } from "../../lib/dancer-selection";
@@ -34,7 +36,11 @@ class GeminiRequestError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
 
-async function uploadAndPrepare(video: UploadedVideo, index: number, apiKey: string, trackUpload: (file: GeminiFile) => void): Promise<GeminiFile> {
+type CritiqueVideo = Pick<UploadedVideo, "name" | "size" | "type" | "sha256"> & {
+  stream: () => ReadableStream<Uint8Array> | Promise<ReadableStream<Uint8Array>>;
+};
+
+async function uploadAndPrepare(video: CritiqueVideo, index: number, apiKey: string, trackUpload: (file: GeminiFile) => void): Promise<GeminiFile> {
   const startUpload = await fetch(`${UPLOAD_BASE}/files`, {
     method: "POST",
     headers: {
@@ -58,7 +64,7 @@ async function uploadAndPrepare(video: UploadedVideo, index: number, apiKey: str
   const uploadResponse = await fetch(uploadUrl, {
     method: "POST",
     headers: { "X-Goog-Upload-Offset": "0", "X-Goog-Upload-Command": "upload, finalize", "Content-Type": video.type, "Content-Length": String(video.size) },
-    body: video.stream(),
+    body: await video.stream(),
     duplex: "half",
   } as RequestInit & { duplex: "half" });
   if (!uploadResponse.ok) {
@@ -235,51 +241,82 @@ async function responseError(response: Response) {
 }
 
 export async function POST(request: Request) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) return jsonError("Sign in before requesting video feedback.", 401);
+  if (!usesPostgres()) return jsonError("Dancer selection requires PostgreSQL in this environment.", 503);
+  if (request.headers.get("content-type")?.startsWith("application/json")) {
+    const body = await request.json().catch(() => null);
+    if (typeof body?.earlierVideoId !== "string" || !body.earlierVideoId || body.earlierVideoId.length > 128
+      || (body.newerVideoId != null && (typeof body.newerVideoId !== "string" || !body.newerVideoId || body.newerVideoId.length > 128))) {
+      return jsonError("Choose saved videos before requesting AI feedback.", 400);
+    }
+    try {
+      const earlier = await savedCritiqueVideo(user.id, body.earlierVideoId);
+      const newer = body.newerVideoId ? await savedCritiqueVideo(user.id, body.newerVideoId) : null;
+      if (!earlier || (body.newerVideoId && !newer)) return jsonError("A selected video is unavailable in your library.", 404);
+      const fields = new Map<string, string>();
+      for (const field of ["chooseDancer", "earlierSongStart", "newerSongStart", "alignmentSource"]) {
+        if (typeof body[field] === "string") fields.set(field, body[field]);
+      }
+      return await critiqueVideo(user.id, earlier, newer, (name) => fields.get(name) ?? null);
+    } catch (error) {
+      console.error("Could not load videos for feedback:", error);
+      return jsonError("Your saved videos could not be loaded for feedback.", 500);
+    }
+  }
   let form: VideoUpload;
   try {
-    form = await readVideoUpload(request);
+    form = await readVideoUpload(request, ["video", "comparisonVideo"], LEGACY_CRITIQUE_BYTES);
   } catch (error) {
     return jsonError(error instanceof VideoUploadError ? error.message : "The video upload could not be read.", error instanceof VideoUploadError ? error.status : 500);
   }
   try {
-    return await critiqueVideo(request, form);
+    const earlier = form.get("video");
+    const newer = form.get("comparisonVideo");
+    if (!isUploadedVideo(earlier)) return jsonError("Choose the earlier take before requesting a critique.", 400);
+    if (newer !== null && !isUploadedVideo(newer)) return jsonError("Choose a valid video for the newer take.", 400);
+    return await critiqueVideo(user.id, earlier, newer, (name) => form.get(name));
   } finally {
     await form.cleanup();
   }
 }
 
-async function critiqueVideo(request: Request, form: VideoUpload) {
-  const user = await getAuthenticatedUser(request);
-  if (!user) return jsonError("Sign in before requesting video feedback.", 401);
-  if (!usesPostgres()) return jsonError("Dancer selection requires PostgreSQL in this environment.", 503);
-  const earlier = form.get("video");
-  const newer = form.get("comparisonVideo");
-  if (!isUploadedVideo(earlier)) return jsonError("Choose the earlier take before requesting a critique.", 400);
-  if (newer !== null && !isUploadedVideo(newer)) return jsonError("Choose a valid video for the newer take.", 400);
-  const videos = isUploadedVideo(newer) ? [earlier, newer] : [earlier];
-  const forceDancerChoice = form.get("chooseDancer") === "1";
+async function savedCritiqueVideo(userId: string, id: string): Promise<CritiqueVideo | null> {
+  const saved = await findLibraryVideo(userId, id);
+  if (!saved?.video.available || !saved.objectKey) return null;
+  const { video, objectKey, hash } = saved;
+  return {
+    name: video.filename, type: video.contentType || "video/mp4", size: video.byteSize, sha256: hash,
+    stream: async () => (await streamLocalVideo(objectKey)).body,
+  };
+}
+
+async function critiqueVideo(userId: string, earlier: CritiqueVideo, newer: CritiqueVideo | null, field: VideoUpload["get"]) {
+  const user = { id: userId };
+  const videos = newer ? [earlier, newer] : [earlier];
+  const forceDancerChoice = field("chooseDancer") === "1";
   if (videos.some((video) => !MIME_TYPES.has(video.type))) return jsonError("Use MP4, MOV, WebM, MPEG, or AVI videos.", 415);
   if (videos.some((video) => video.size === 0)) return jsonError("A selected video is empty.", 400);
-  if (videos.some((video) => video.size > MAX_VIDEO_BYTES) || videos.reduce((sum, video) => sum + video.size, 0) > MAX_VIDEO_BYTES) {
-    return jsonError("AI critique supports up to 250 MB total across both videos.", 413);
+  if (videos.some((video) => video.size > MAX_VIDEO_BYTES)) {
+    return jsonError(`AI critique supports saved videos up to ${MAX_VIDEO_MB} MB each.`, 413);
   }
 
   const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
-  const sessionIdValue = form.get("sessionId");
+  const sessionIdValue = field("sessionId");
   const sessionId = typeof sessionIdValue === "string" && sessionIdValue ? sessionIdValue : null;
   let earlierHash: string;
   let newerHash: string | null = null;
   let cacheKey: string;
   let savedBaseline: ReturnType<typeof findCritiqueForVideo> = null;
-  const alignment = isUploadedVideo(newer) ? parseSongAlignment(form.get("earlierSongStart"), form.get("newerSongStart"), form.get("alignmentSource")) : null;
-  if (isUploadedVideo(newer) && !alignment) return jsonError("Confirm both song start times before requesting a comparison. Audio alignment has not been confirmed.", 422);
+  const alignment = newer ? parseSongAlignment(field("earlierSongStart"), field("newerSongStart"), field("alignmentSource")) : null;
+  if (newer && !alignment) return jsonError("Confirm both song start times before requesting a comparison. Audio alignment has not been confirmed.", 422);
   const earlierSongStart = alignment?.earlierSongStart ?? 0;
   const newerSongStart = alignment?.newerSongStart ?? 0;
   try {
     earlierHash = earlier.sha256;
-    if (isUploadedVideo(newer)) newerHash = newer.sha256;
+    if (newer) newerHash = newer.sha256;
     cacheKey = makeCritiqueKey(earlierHash, newerHash, user.id);
-    if (sessionId) {
+    if (sessionId && isUploadedVideo(earlier)) {
       if (usesPostgres()) {
         const hasAccess = await pgCanAccessSession(user.id, sessionId, true) || await pgCanAccessSession(user.id, sessionId, false);
         if (!hasAccess) return jsonError("You do not have access to this practice session.", 403);
@@ -432,7 +469,7 @@ async function critiqueVideo(request: Request, form: VideoUpload) {
         earlierHash,
         newerHash,
         earlierFilename: earlier.name,
-        newerFilename: isUploadedVideo(newer) ? newer.name : null,
+        newerFilename: newer?.name ?? null,
         model,
         critique,
         earlierSongStart,

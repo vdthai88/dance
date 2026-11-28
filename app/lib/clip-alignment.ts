@@ -14,18 +14,19 @@ const MIN_CORRELATION_SCORE = 0.72;
 const MIN_CONFIDENCE_MARGIN = 0.06;
 const BAND_CENTERS = [90, 130, 180, 250, 340, 460, 620, 820, 1080, 1400, 1800, 2300];
 
-async function readAudio(file: File, onProgress: (fraction: number) => void) {
-  if (file.size > 250 * 1024 * 1024) throw new Error("Each video must be 250 MB or smaller for local alignment.");
+type AudioSource = File | { name: string; url: string };
+
+async function readAudio(file: AudioSource, onProgress: (fraction: number) => void) {
   const context = new AudioContext();
   const video = document.createElement("video");
-  const objectUrl = URL.createObjectURL(file);
-  video.preload = "auto";
+  const objectUrl = "url" in file ? null : URL.createObjectURL(file);
+  video.preload = "metadata";
   video.playsInline = true;
   video.volume = 1;
   // High playback rates can mute media audio in some browsers, which would make
   // the Web Audio analyser report silence even though the video has a soundtrack.
   video.playbackRate = 1.5;
-  video.src = objectUrl;
+  video.src = "url" in file ? file.url : objectUrl!;
   video.style.cssText = "position:fixed;left:-10000px;top:0;width:1px;height:1px;opacity:0;pointer-events:none";
   document.body.appendChild(video);
   try {
@@ -95,7 +96,7 @@ async function readAudio(file: File, onProgress: (fraction: number) => void) {
     video.removeAttribute("src");
     video.load();
     video.remove();
-    URL.revokeObjectURL(objectUrl);
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
     await context.close().catch(() => undefined);
   }
 }
@@ -230,8 +231,8 @@ function audioMatches(rawFirst: AudioFrame[], rawSecond: AudioFrame[], minimumWi
 
 /** Finds a shared audio-energy pattern in the opening 25 seconds of each clip. */
 export async function alignClipsByAudio(
-  earlierFile: File,
-  newerFile: File,
+  earlierFile: AudioSource,
+  newerFile: AudioSource,
   onProgress: (progress: number) => void,
 ): Promise<ClipMatch> {
   onProgress(0.05);

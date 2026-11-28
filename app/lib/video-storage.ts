@@ -1,8 +1,9 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { CopyObjectCommand, DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { createReadStream } from "node:fs";
 import { copyFile, mkdir, rename, rm, stat } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import { Readable } from "node:stream";
+import { videoMimeType } from "./video-upload-limits";
 
 export type LocalVideoWrite = {
   companyId: string | null;
@@ -25,7 +26,7 @@ function safeSegment(value: string) {
 
 type VideoStorageDriver = "local" | "r2";
 
-function configuredDriver(): VideoStorageDriver {
+export function configuredDriver(): VideoStorageDriver {
   const value = process.env.VIDEO_STORAGE_DRIVER || "local";
   if (value === "local" || value === "r2") return value;
   throw new Error(`Unsupported VIDEO_STORAGE_DRIVER: ${value}. Use local or r2.`);
@@ -43,7 +44,7 @@ function r2Config() {
   return { bucket, accessKeyId, secretAccessKey, endpoint };
 }
 
-function r2Client() {
+export function r2Client() {
   const config = r2Config();
   return {
     bucket: config.bucket,
@@ -73,10 +74,21 @@ function localPath(objectKey: string) {
   return target;
 }
 
-export async function saveLocalVideo(input: LocalVideoWrite) {
+export async function saveLocalVideo(input: LocalVideoWrite, stagedKey?: string) {
   const objectKey = localVideoObjectKey(input);
   if (configuredDriver() === "r2") {
     const { bucket, client } = r2Client();
+    if (stagedKey) {
+      try {
+        await client.send(new CopyObjectCommand({
+          Bucket: bucket, Key: objectKey,
+          CopySource: `${bucket}/${stagedKey.split("/").map(encodeURIComponent).join("/")}`,
+          MetadataDirective: "REPLACE", ContentType: videoMimeType(input.filename),
+          Metadata: { "original-filename": safeMetadata(input.filename), sha256: input.hash },
+        }));
+      } finally { client.destroy(); }
+      return objectKey;
+    }
     const body = createReadStream(input.filePath);
     try {
       await client.send(new PutObjectCommand({
@@ -84,7 +96,7 @@ export async function saveLocalVideo(input: LocalVideoWrite) {
         Key: objectKey,
         Body: body,
         ContentLength: input.byteSize,
-        ContentType: mimeTypeForFilename(input.filename),
+        ContentType: videoMimeType(input.filename),
         Metadata: { "original-filename": safeMetadata(input.filename), sha256: input.hash },
       }));
     } finally {
@@ -168,11 +180,6 @@ export async function deleteLocalVideo(objectKey: string | null) {
     return;
   }
   await rm(localPath(objectKey), { force: true });
-}
-
-function mimeTypeForFilename(filename: string) {
-  const extension = basename(filename).split(".").pop()?.toLowerCase();
-  return extension === "mov" ? "video/quicktime" : extension === "webm" ? "video/webm" : "video/mp4";
 }
 
 function safeMetadata(value: string) {

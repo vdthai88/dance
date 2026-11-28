@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { deleteLocalVideo, saveLocalVideo, streamLocalVideo, VideoRangeError } from '../app/lib/video-storage.ts';
+import { registerHooks } from 'node:module';
+
+const hook = registerHooks({ resolve(specifier, context, next) {
+  return next(specifier === './video-upload-limits' ? new URL('./video-upload-limits.ts', context.parentURL).href : specifier, context);
+}});
+const { deleteLocalVideo, saveLocalVideo, streamLocalVideo, VideoRangeError } = await import('../app/lib/video-storage.ts');
+hook.deregister();
 
 test('stores a file and streams full, partial and suffix playback without buffering', async () => {
   const root = await mkdtemp(join(tmpdir(), 'one-dance-storage-test-'));

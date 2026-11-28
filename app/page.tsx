@@ -6,6 +6,8 @@ import { alignClipsByAudio } from "./lib/clip-alignment";
 import { isDanceCritique } from "./lib/gemini-critique";
 import { readApiJson } from "./lib/api-response";
 import { checkVideoPlayback } from "./lib/video-playback-check";
+import { uploadVideo } from "./lib/upload-video-client";
+import { MAX_VIDEO_BYTES, MAX_VIDEO_MB } from "./lib/video-upload-limits";
 import { AccountMenu } from "./components/account-menu";
 import { TeacherFeedbackPanel } from "./components/teacher-feedback-panel";
 import { SessionPanel } from "./components/session-panel";
@@ -17,6 +19,12 @@ import { DancerSelectionPanel } from "./components/dancer-selection-panel";
 import { isDancerDetection } from "./lib/dancer-selection";
 import type { DancerChoiceRequest } from "./lib/dancer-selection";
 
+type SelectedVideo = File | { id: string; name: string; url: string };
+
+function savedSelection(video: LibraryVideo): SelectedVideo {
+  return { id: video.id, name: video.filename, url: `/api/replai-videos/${encodeURIComponent(video.id)}/content` };
+}
+
 function formatPreciseTime(seconds: number) {
   const safe = Math.max(0, seconds);
   const minutes = Math.floor(safe / 60);
@@ -27,8 +35,18 @@ function formatPreciseTime(seconds: number) {
 type TeacherCompany = { id: string; name: string; type: "studio" | "private_company" | "other"; isDefault?: boolean };
 
 export default function Home() {
-  const [videoFile, setVideoFile] = useState<File | null>(null);
-  const [comparisonFile, setComparisonFile] = useState<File | null>(null);
+  const [videoFile, setVideoFile] = useState<SelectedVideo | null>(null);
+  const [comparisonFile, setComparisonFile] = useState<SelectedVideo | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [uploadLimitMb, setUploadLimitMb] = useState<number | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch("/api/video-uploads", { signal: controller.signal })
+      .then((response) => readApiJson(response, "Upload settings"))
+      .then((result) => { if (!controller.signal.aborted) setUploadLimitMb((result as { maxMb: number }).maxMb); })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, []);
   const [earlierSongStart, setEarlierSongStart] = useState(0);
   const [newerSongStart, setNewerSongStart] = useState(0);
   const [alignmentSource, setAlignmentSource] = useState<"auto" | "manual" | null>(null);
@@ -158,15 +176,15 @@ export default function Home() {
   async function saveVideoToLibrary(file: File, groupId?: string | null, earlierVideoId?: string) {
     const selectionId = critiqueRequestId.current;
     setSavingVideos((current) => current + 1);
+    setUploadProgress(null);
     setVideoSaveError("");
     try {
       await checkVideoPlayback(file);
       if (selectionId !== critiqueRequestId.current) return;
-      const form = new FormData();
-      form.set("video", file, file.name);
-      if (earlierVideoId) form.set("earlierVideoId", earlierVideoId);
-      else if (groupId) form.set("groupId", groupId);
-      const response = await fetch("/api/replai-videos", { method: "POST", body: form });
+      const fields: Record<string, string> = {};
+      if (earlierVideoId) fields.earlierVideoId = earlierVideoId;
+      else if (groupId) fields.groupId = groupId;
+      const response = await uploadVideo("/api/replai-videos", file, { fields, onProgress: setUploadProgress });
       const saved = await readApiJson(response, "Save video") as LibraryUploadResult;
       if (!saved?.id) throw new Error("The server did not confirm the saved video. Choose it again to retry.");
       savedVideoIds.current.set(file, saved.id);
@@ -180,7 +198,7 @@ export default function Home() {
       return saved;
     } catch (caught) {
       setVideoSaveError(`“${file.name}” was not saved: ${caught instanceof Error ? caught.message : "Please choose the file again to retry."}`);
-    } finally { setSavingVideos((current) => current - 1); }
+    } finally { setSavingVideos((current) => current - 1); setUploadProgress(null); }
   }
 
   function cancelCurrentCritique() {
@@ -208,8 +226,8 @@ export default function Home() {
   function chooseFile(file?: File, groupId?: string) {
     if (!file) return;
     setError("");
-    if (!file.type.startsWith("video/")) { setError("Choose a video file to continue."); return; }
-    if (file.size > 250 * 1024 * 1024) { setError("This preview supports videos up to 250 MB."); return; }
+    if (!/\.(mp4|mov|webm)$/i.test(file.name)) { setError("Choose an MP4, MOV, or WebM video."); return; }
+    if (file.size > MAX_VIDEO_BYTES) { setError(`Videos can be up to ${MAX_VIDEO_MB} MB.`); return; }
     cancelCurrentCritique();
     const selectionId = critiqueRequestId.current;
     setUploadNotice("");
@@ -232,8 +250,8 @@ export default function Home() {
   function chooseComparison(file?: File, groupId?: string | null, earlierVideoId?: string) {
     if (!file) return;
     setError("");
-    if (!file.type.startsWith("video/")) { setError("Choose a video file for the newer take."); return; }
-    if (file.size > 250 * 1024 * 1024) { setError("This preview supports videos up to 250 MB per clip."); return; }
+    if (!/\.(mp4|mov|webm)$/i.test(file.name)) { setError("Choose an MP4, MOV, or WebM video for the newer take."); return; }
+    if (file.size > MAX_VIDEO_BYTES) { setError(`Videos can be up to ${MAX_VIDEO_MB} MB.`); return; }
     cancelCurrentCritique();
     setUploadNotice("");
     const selectionId = critiqueRequestId.current;
@@ -245,20 +263,21 @@ export default function Home() {
   }
 
   async function startLibraryComparison(video: LibraryVideo, newerFile: File) {
-    if (!newerFile.type.startsWith("video/")) throw new Error("Choose a video file for the newer take.");
-    if (newerFile.size + video.byteSize > 250 * 1024 * 1024) throw new Error("The two takes must total 250 MB or less.");
-    cancelCurrentCritique();
-    const selectionId = critiqueRequestId.current;
-    const response = await fetch(`/api/replai-videos/${encodeURIComponent(video.id)}/content`, { cache: "no-store" });
-    if (!response.ok) throw new Error("The saved earlier take could not be loaded. Upload it again to compare.");
-    const blob = await response.blob();
-    if (selectionId !== critiqueRequestId.current) return;
-    const earlierFile = new File([blob], video.filename, { type: video.contentType || blob.type || "video/mp4" });
-    savedVideoIds.current.set(earlierFile, video.id);
-    setVideoFile(earlierFile);
+    if (!/\.(mp4|mov|webm)$/i.test(newerFile.name)) throw new Error("Choose an MP4, MOV, or WebM newer take.");
+    if (newerFile.size > MAX_VIDEO_BYTES) throw new Error(`Videos can be up to ${MAX_VIDEO_MB} MB.`);
+    setVideoFile(savedSelection(video));
     setEarlierSongStart(0);
     setVideoSaveError("");
     chooseComparison(newerFile, video.groupId, video.id);
+  }
+
+  function compareSavedVideos(earlier: LibraryVideo, newer: LibraryVideo) {
+    cancelCurrentCritique();
+    setVideoSaveError(""); setUploadNotice(""); setError("");
+    setVideoFile(savedSelection(earlier)); setComparisonFile(savedSelection(newer));
+    setEarlierSongStart(0); setNewerSongStart(0);
+    setActiveLibraryVideoId(newer.id); setFocusedLibraryVideoId(newer.id);
+    setAutoCritiquePending(true);
   }
 
 
@@ -268,14 +287,7 @@ export default function Home() {
 
   async function reviewLibraryVideo(video: LibraryVideo, chooseDancer: boolean) {
     cancelCurrentCritique();
-    const selectionId = critiqueRequestId.current;
-    const response = await fetch(`/api/replai-videos/${encodeURIComponent(video.id)}/content`, { cache: "no-store" });
-    if (!response.ok) throw new Error("This saved video could not be opened.");
-    const blob = await response.blob();
-    if (selectionId !== critiqueRequestId.current) return;
-    const file = new File([blob], video.filename, { type: video.contentType || blob.type || "video/mp4" });
-    savedVideoIds.current.set(file, video.id);
-    setVideoFile(file); setComparisonFile(null); setForceDancerChoice(chooseDancer);
+    setVideoFile(savedSelection(video)); setComparisonFile(null); setForceDancerChoice(chooseDancer);
     setActiveLibraryVideoId(video.id); setFocusedLibraryVideoId(video.id);
     setLibraryRefreshKey((current) => current + 1);
     setError(""); setVideoSaveError(""); setUploadNotice(""); setAutoCritiquePending(true);
@@ -289,7 +301,9 @@ export default function Home() {
       setError("Confirm the song start times below before sending this comparison to AI.");
       return;
     }
-    if (!savedVideoIds.current.get(videoFile) || (comparisonFile && !savedVideoIds.current.get(comparisonFile))) {
+    const earlierVideoId = "id" in videoFile ? videoFile.id : savedVideoIds.current.get(videoFile);
+    const newerVideoId = comparisonFile ? ("id" in comparisonFile ? comparisonFile.id : savedVideoIds.current.get(comparisonFile)) : undefined;
+    if (!earlierVideoId || (comparisonFile && !newerVideoId)) {
       setError("Save both selected videos before requesting AI feedback. Choose the failed upload again to retry.");
       return;
     }
@@ -300,16 +314,11 @@ export default function Home() {
     setIsCritiquing(true);
     setError("");
     try {
-      const form = new FormData();
-      form.set("video", videoFile, videoFile.name);
-      if (forceDancerChoice) form.set("chooseDancer", "1");
-      if (comparisonFile) form.set("comparisonVideo", comparisonFile, comparisonFile.name);
-      if (comparisonFile) {
-        form.set("earlierSongStart", String(earlierSongStart));
-        form.set("newerSongStart", String(newerSongStart));
-        form.set("alignmentSource", alignmentSource!);
-      }
-      const response = await fetch("/api/dance-critique", { method: "POST", body: form, signal: controller.signal });
+      const response = await fetch("/api/dance-critique", {
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+        body: JSON.stringify({ earlierVideoId, newerVideoId, chooseDancer: forceDancerChoice ? "1" : undefined,
+          earlierSongStart: String(earlierSongStart), newerSongStart: String(newerSongStart), alignmentSource }),
+      });
       const result = await readApiJson(response, "Video critique");
       if (requestId !== critiqueRequestId.current) return;
       if (response.status === 202) {
@@ -317,7 +326,7 @@ export default function Home() {
         if (!data.needsDancerSelection || !Array.isArray(data.choices) || !data.choices.length || !data.choices.every((choice) => ["earlier", "newer"].includes(choice.take) && isDancerDetection(choice.detection))) throw new Error("AI returned an invalid dancer selection. Please retry.");
         const choices = data.choices.map((choice) => {
           const file = choice.take === "newer" ? comparisonFile : videoFile;
-          const videoId = file ? savedVideoIds.current.get(file) : null;
+          const videoId = choice.take === "newer" ? newerVideoId : earlierVideoId;
           if (!file || !videoId) throw new Error("Save this video before choosing its dancer.");
           return { ...choice, videoId, filename: file.name };
         });
@@ -326,7 +335,7 @@ export default function Home() {
       }
       if (!isDanceCritique(result)) throw new Error("The server returned an invalid critique. Check Render Logs for this request, then retry.");
       if (requestId !== critiqueRequestId.current) return;
-      setFocusedLibraryVideoId(savedVideoIds.current.get(comparisonFile ?? videoFile) ?? null);
+      setFocusedLibraryVideoId(newerVideoId ?? earlierVideoId);
       setActiveLibraryVideoId(null);
       setLibraryRefreshKey((current) => current + 1);
       alignmentRequestId.current += 1;
@@ -457,8 +466,8 @@ export default function Home() {
             <button className="button button-dark upload-check-ok" type="button" onClick={() => { setUploadCheckMessage(""); setVideoSaveError(""); }}>OK</button>
           </> : <>
           <div className="upload-check-spinner" aria-hidden="true" />
-          <h2 id="upload-check-title">Checking your video</h2>
-          <p id="upload-check-description">We’re checking playback and saving your video securely. This may take a moment.</p>
+          <h2 id="upload-check-title">{uploadProgress !== null && uploadProgress < 100 ? `Uploading your video (${uploadProgress}%)` : "Checking your video"}</h2>
+          <p id="upload-check-description">{uploadProgress !== null && uploadProgress < 100 ? "Keep this page open while the video uploads." : "We're checking playback and saving your video."}</p>
           </>}
         </div>
       </div>}
@@ -525,7 +534,7 @@ export default function Home() {
           </div>
         </section>
 
-        <VideoLibrary refreshKey={libraryRefreshKey} focusVideoId={focusedLibraryVideoId} onCompare={startLibraryComparison} onUpload={chooseFile} onReview={reviewLibraryVideo} pendingReview={activeLibraryVideoId && pendingReviewContent ? { videoId: activeLibraryVideoId, content: pendingReviewContent } : null} busy={isCritiquing || savingVideos > 0 || (autoCritiquePending && !videoSaveError)}>
+        <VideoLibrary refreshKey={libraryRefreshKey} focusVideoId={focusedLibraryVideoId} onCompare={startLibraryComparison} onCompareSaved={compareSavedVideos} onUpload={chooseFile} onReview={reviewLibraryVideo} pendingReview={activeLibraryVideoId && pendingReviewContent ? { videoId: activeLibraryVideoId, content: pendingReviewContent } : null} busy={isCritiquing || savingVideos > 0 || (autoCritiquePending && !videoSaveError)}>
         <p className="video-save-status" role="status">{savingVideos > 0 ? `Checking playback and saving ${savingVideos === 1 ? "your video" : "your videos"} to your library...` : "Uploaded videos are saved privately and automatically sent for AI feedback."}</p>
         {videoSaveError && <p className="error-message" role="alert">{videoSaveError}</p>}
         {uploadNotice && <p className="video-library-message" role="status">{uploadNotice}</p>}
@@ -533,7 +542,7 @@ export default function Home() {
             <input ref={fileInput} className="visually-hidden" type="file" accept="video/*" onChange={onFileChange} aria-label="Choose a dance video" />
             <div className="upload-icon"><span>{"\u2191"}</span></div><h3>Drop your video here</h3><p>or find a take you love</p>
             <button className="button button-dark" onClick={() => fileInput.current?.click()}>Choose a video <span>{"\u2197"}</span></button>
-            <div className="file-meta">MP4, MOV or WebM <span>{"\u00b7"}</span> Up to 250 MB <span>{"\u00b7"}</span> 3 minutes for analysis</div>
+            <div className="file-meta">MP4, MOV or WebM {uploadLimitMb && <><span>{"\u00b7"}</span> Up to {uploadLimitMb} MB </>}<span>{"\u00b7"}</span> 3 minutes for analysis</div>
           </div>
         {error && !activeLibraryVideoId && <p className="error-message" role="alert">{error}</p>}
         </VideoLibrary>

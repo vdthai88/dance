@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { getAuthenticatedUser } from "../../lib/auth-session";
 import { usesPostgres } from "../../lib/database-driver";
 import { findDuplicatePersonalVideo, findLibraryVideo, listLibraryVideos, listVideoGroups, savePersonalVideo } from "../../lib/video-library-store";
-import { isUploadedVideo, readVideoUpload, VideoUploadError } from "../../lib/video-upload";
+import { isUploadedVideo, VideoUploadError } from "../../lib/video-upload";
+import { readVideoSubmission } from "../../lib/direct-video-storage";
 import type { VideoUpload } from "../../lib/video-upload";
 import { saveLocalVideo } from "../../lib/video-storage";
 import { validateUploadedVideo } from "../../lib/video-validation";
@@ -27,7 +28,7 @@ export async function POST(request: Request) {
     const user = await getAuthenticatedUser(request);
     if (!user) return NextResponse.json({ error: "Sign in to save a video." }, { status: 401 });
     if (!usesPostgres()) return NextResponse.json({ error: "Saving to your video library is unavailable in this environment." }, { status: 503 });
-    form = await readVideoUpload(request, ["video"]);
+    form = await readVideoSubmission(request, user.id, null);
     const video = form.get("video");
     if (!isUploadedVideo(video) || !video.size || !video.type.startsWith("video/")) return NextResponse.json({ error: "Choose a nonempty video file." }, { status: 400 });
     const groupId = form.get("groupId");
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
     const duplicate = await findDuplicatePersonalVideo(user.id, video.sha256);
     if (duplicate) return NextResponse.json(duplicate);
     await validateUploadedVideo(video);
-    const objectKey = await saveLocalVideo({ companyId: null, studentId: user.id, sessionId: "replai", hash: video.sha256, filename: video.name, filePath: video.path, byteSize: video.size });
+    const objectKey = await saveLocalVideo({ companyId: null, studentId: user.id, sessionId: "replai", hash: video.sha256, filename: video.name, filePath: video.path, byteSize: video.size }, video.stagedKey);
     const saved = await savePersonalVideo({ userId: user.id, filename: video.name, contentType: video.type, byteSize: video.size, hash: video.sha256, objectKey, groupId, earlierVideoId });
     return NextResponse.json(saved, { status: saved.alreadyExists ? 200 : 201 });
   } catch (error) {

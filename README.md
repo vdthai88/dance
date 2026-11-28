@@ -107,7 +107,26 @@ New personal uploads receive a group named after the video filename (up to 100 c
 
 Video upload routes stream multipart requests into temporary files in the operating system's temporary directory. SHA-256 fingerprints are calculated as bytes arrive. The app then streams those files to Gemini and, for session videos, to the configured storage driver. It removes temporary files after each request, including handled failures. Saved-video playback also streams data and supports byte-range requests for seeking.
 
-The limit remains 250 MB total per upload request. Temporary disk must have enough space for active uploads; it is working space, not permanent storage. On Render, keep `VIDEO_STORAGE_DRIVER=r2` for saved videos. This bounds video-buffer memory usage but does not guarantee every workload will fit a 512 MB instance. Direct browser-to-object-storage uploads and background processing remain options for higher concurrency.
+Local storage accepts one video up to 600 MB. R2 environments accept up to 250 MB per upload request through the web server until direct uploads are enabled. Temporary disk must have enough space for active validation. Comparisons in the library use saved video IDs and stream the two files from storage for AI feedback. Older clients that send both raw files to the critique endpoint still share a 250 MB request limit.
+
+### Direct uploads to R2
+
+Keep the R2 bucket private. Add a bucket CORS rule permitting `PUT` from the app's exact HTTPS origin. The following rule covers both staging addresses:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://stage.theonedance.com", "https://one-dance-staging.onrender.com"],
+    "AllowedMethods": ["PUT"],
+    "AllowedHeaders": ["content-type", "content-length"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+Add an object lifecycle rule that expires objects under `incoming-video/` after two days. This removes staged files from abandoned transfers. Keep existing lifecycle rules and scope this rule to that prefix so it only targets staged files.
+
+Then set `VIDEO_DIRECT_UPLOADS=true` on the web service with `VIDEO_STORAGE_DRIVER=r2`. The browser uploads 16 MiB parts directly to R2 with progress reporting. If a transfer stops, select the same file on the same device within 24 hours to resume from completed parts. Completed transfers remain private while the server streams the file to temporary disk for fingerprinting and sampled validation. Only validated videos appear in the library or session.
 
 ## Limits of these estimates
 

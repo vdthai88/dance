@@ -4,7 +4,13 @@ import { createHash } from 'node:crypto';
 import { access, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { Readable } from 'node:stream';
-import { isUploadedVideo, readVideoUpload, VideoUploadError } from '../app/lib/video-upload.ts';
+import { registerHooks } from 'node:module';
+
+const hook = registerHooks({ resolve(specifier, context, next) {
+  return next(specifier === './video-upload-limits' ? new URL('./video-upload-limits.ts', context.parentURL).href : specifier, context);
+}});
+const { isUploadedVideo, readVideoUpload, VideoUploadError } = await import('../app/lib/video-upload.ts');
+hook.deregister();
 
 function requestFor(parts, ending = true) {
   const boundary = 'one-dance-test-boundary';

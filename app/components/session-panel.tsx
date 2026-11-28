@@ -5,6 +5,9 @@ import type { FormEvent } from "react";
 import type { DanceCritique, TeacherFeedback } from "../lib/gemini-critique";
 import { ConnectionPanel } from "./connection-panel";
 import { checkVideoPlayback } from "../lib/video-playback-check";
+import { uploadVideo } from "../lib/upload-video-client";
+import { readApiJson } from "../lib/api-response";
+import { MAX_VIDEO_BYTES, MAX_VIDEO_MB } from "../lib/video-upload-limits";
 
 type Role = "student" | "teacher";
 type Student = { id: string; name: string; organizationId: string | null; organizationName: string | null; createdAt: string };
@@ -62,6 +65,7 @@ export function SessionPanel({ role, onRoleChange, onSessionChange, companyId }:
   const [isSavingOwnerStatus, setIsSavingOwnerStatus] = useState(false);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const [isAttachingVideo, setIsAttachingVideo] = useState(false);
+  const [uploadPercentage, setUploadPercentage] = useState<number | null>(null);
   const [isDraggingSessionVideo, setIsDraggingSessionVideo] = useState(false);
   const [uploadedVideoName, setUploadedVideoName] = useState("");
   const [error, setError] = useState("");
@@ -278,19 +282,16 @@ export function SessionPanel({ role, onRoleChange, onSessionChange, companyId }:
   async function attachVideo(video: File) {
     if (!selectedSessionId) return;
     setIsAttachingVideo(true);
+    setUploadPercentage(null);
     setError("");
     try {
       await checkVideoPlayback(video);
-      const form = new FormData();
-      form.set("video", video, video.name);
-      const response = await fetch(`/api/sessions/${encodeURIComponent(selectedSessionId)}/videos`, { method: "POST", body: form });
-      const result = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(result.error || "Could not attach this video.");
-      const refreshed = await fetch(`/api/sessions/${encodeURIComponent(selectedSessionId)}`, { cache: "no-store" });
-      const data = await refreshed.json() as SessionSnapshot | { error?: string };
-      if (!refreshed.ok) throw new Error("error" in data && data.error ? data.error : "Video attached but session details could not refresh.");
-      setSnapshot(data as SessionSnapshot);
+      const response = await uploadVideo(`/api/sessions/${encodeURIComponent(selectedSessionId)}/videos`, video, { sessionId: selectedSessionId, onProgress: setUploadPercentage });
+      await readApiJson(response, "Attach session video", "Could not attach this video.");
       setUploadedVideoName(video.name);
+      const refreshed = await fetch(`/api/sessions/${encodeURIComponent(selectedSessionId)}`, { cache: "no-store" });
+      const data = await readApiJson(refreshed, "Refresh session", "Video attached. Refresh to update the session details.") as SessionSnapshot;
+      setSnapshot((current) => current?.session.id === data.session.id ? data : current);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not attach this video."); }
     finally { setIsAttachingVideo(false); }
   }
@@ -302,11 +303,12 @@ export function SessionPanel({ role, onRoleChange, onSessionChange, companyId }:
   }
 
   function chooseSessionVideo(video?: File | null) {
-    if (!requireSessionForVideo() || !video) return;
-    if (!video.type.startsWith("video/")) {
-      setError("Choose a video file to upload.");
+    if (isAttachingVideo || !requireSessionForVideo() || !video) return;
+    if (!/\.(mp4|mov|webm)$/i.test(video.name)) {
+      setError("Choose an MP4, MOV, or WebM video.");
       return;
     }
+    if (video.size > MAX_VIDEO_BYTES) { setError(`Videos can be up to ${MAX_VIDEO_MB} MB.`); return; }
     void attachVideo(video);
   }
 
@@ -375,7 +377,7 @@ export function SessionPanel({ role, onRoleChange, onSessionChange, companyId }:
     {role === "teacher" && <section className={`session-video-upload${isDraggingSessionVideo ? " dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setIsDraggingSessionVideo(true); }} onDragLeave={() => setIsDraggingSessionVideo(false)} onDrop={(event) => { event.preventDefault(); setIsDraggingSessionVideo(false); chooseSessionVideo(event.dataTransfer.files[0]); }}>
       <input ref={sessionVideoInput} className="visually-hidden" type="file" accept="video/*" onChange={(event) => { chooseSessionVideo(event.target.files?.[0]); event.currentTarget.value = ""; }} aria-label="Upload video for this session"/>
       <div><div className="eyebrow muted">SESSION VIDEO</div><h3>Upload a practice video</h3><p>{selectedSessionId ? "This video will be saved to the selected session." : "Select an existing session or create a new one before uploading."}</p></div>
-      <button className="button button-dark" type="button" onClick={() => { if (requireSessionForVideo()) sessionVideoInput.current?.click(); }} disabled={isAttachingVideo}>{isAttachingVideo ? "Uploading video…" : "Choose or drop video"}</button>
+      <button className="button button-dark" type="button" onClick={() => { if (requireSessionForVideo()) sessionVideoInput.current?.click(); }} disabled={isAttachingVideo}>{isAttachingVideo ? uploadPercentage === 100 ? "Checking uploaded video..." : uploadPercentage === null ? "Preparing video..." : `Uploading video (${uploadPercentage}%)` : "Choose or drop video"}</button>
       {error && <p className="session-upload-error" role="alert">{error}</p>}
       {uploadedVideoName && <p className="session-upload-success" role="status">Added “{uploadedVideoName}” to this session.</p>}
     </section>
