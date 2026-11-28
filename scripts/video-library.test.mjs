@@ -321,6 +321,17 @@ test('personal and session video listing enforces account ownership and deduplic
     assert.equal((await findPgCritiqueForVideo(input.hash, 'student-a', firstTarget.key)).critique.summary, 'Feedback for left dancer.');
     assert.equal((await getPgDancerSelection('student-b', input.hash)).target, null);
     assert.ok(await findPgCritique(firstRecord.key, 'student-a'), 'Changing focus preserves prior feedback records');
+
+    const scores = { technicalAbility: 38, difficulty: 20, performance: 27 };
+    await savePgCritique({ ...firstRecord, critique: { ...firstRecord.critique, scores } }, 'student-a');
+    await savePgCritique({ ...secondRecord, critique: { ...secondRecord.critique, scores } }, 'student-a');
+    await savePgCritique({ ...otherBaseline, critique: { ...otherBaseline.critique, scores: { ...scores, technicalAbility: 45 } } }, 'student-b');
+    await savePgCritique({ ...otherComparison, critique: { ...otherComparison.critique, scores: { ...scores, difficulty: null } } }, 'student-b');
+    const ranked = (await getLibraryVideoDetails('student-a', saved.id)).reviews[0];
+    assert.deepEqual(ranked.scoreRanking, { place: 2, totalScores: 3 }, 'Equal totals share a rank, and scores from other accounts count');
+    assert.equal(ranked.key, secondRecord.key, 'The other account’s review stays private');
+    await client.query('INSERT INTO user_critique_deletions (user_id, cache_key) VALUES ($1, $2)', ['student-b', otherBaseline.key]);
+    assert.deepEqual((await getLibraryVideoDetails('student-a', saved.id)).reviews[0].scoreRanking, { place: 1, totalScores: 2 });
   } finally {
     pool.query = originalQuery;
     pool.connect = originalConnect;

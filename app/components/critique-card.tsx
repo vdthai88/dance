@@ -1,6 +1,7 @@
 "use client";
 
 import type { DanceCritique, ProgressStatus } from "../lib/gemini-critique";
+import type { ScoreRanking } from "../lib/video-library-types";
 import { DANCE_SCORE_CATEGORIES, totalDanceScore } from "../lib/gemini-critique";
 
 function formatTime(seconds: number) {
@@ -17,26 +18,37 @@ const progressLabels: Record<ProgressStatus, { label: string; path: string }> = 
 
 const scoreCategories = Object.keys(DANCE_SCORE_CATEGORIES) as Array<keyof typeof DANCE_SCORE_CATEGORIES>;
 
-export function CritiqueCard({ critique, currentTime, onSeek, title, videoName }: { critique: DanceCritique; currentTime: number; onSeek: (time: number, target?: "earlier" | "new" | "both") => void; title?: string; videoName?: string }) {
+export function CritiqueCard({ critique, currentTime, onSeek, title, videoName, scoreRanking }: { critique: DanceCritique; currentTime: number; onSeek: (time: number, target?: "earlier" | "new" | "both") => void; title?: string; videoName?: string; scoreRanking?: ScoreRanking }) {
   const comparison = critique.comparison !== undefined;
   const legacyProgress = comparison && critique.observations.some((note) => !note.progressStatus);
   const scores = critique.scores;
   const total = scores ? totalDanceScore(scores) : null;
   return <aside className="critique-card">
     <div className="report-top"><div><div className="eyebrow muted">{title || "AI VIDEO CRITIQUE"}</div><h3>Notes for your<br/><em>next practice.</em></h3></div><span className="sample-tag">AI FEEDBACK</span></div>
-    {scores && <dl className="critique-scores" aria-label={comparison ? "AI scores for the newer take" : "AI scores"}>
-      <div className="critique-score-total">
-        <dt>Total score</dt>
-        <dd>{total === null ? "Not assessable" : `${total} / 100`}</dd>
-      </div>
-      {scoreCategories.map((key) => {
-        const { label, maximum } = DANCE_SCORE_CATEGORIES[key];
-        return <div key={key}>
-          <dt>{label}</dt>
-          <dd>{scores[key] === null ? "Not assessable" : `${scores[key]} / ${maximum}`}</dd>
-        </div>;
-      })}
-    </dl>}
+    {scores && <div className="critique-scores" role="group" aria-label={comparison ? "AI scores for the newer take" : "AI scores"}>
+      <dl className="critique-score-overview">
+        <div className="critique-score-total">
+          <dt>Total score</dt>
+          <dd>{total === null ? "Not assessable" : `${total} / 100`}</dd>
+        </div>
+        {scoreRanking && total !== null && <div className="critique-score-ranking">
+          <svg className="critique-rank-trophy" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M8 3h8v7a4 4 0 0 1-8 0V3ZM8 5H4v3a3 3 0 0 0 3 3h1m8-6h4v3a3 3 0 0 1-3 3h-1m-4 3v5m-4 2h8" />
+          </svg>
+          <dt>Ranked</dt>
+          <dd>#{scoreRanking.place.toLocaleString()}</dd>
+        </div>}
+      </dl>
+      <dl className="critique-score-breakdown">
+        {scoreCategories.map((key) => {
+          const { label, maximum } = DANCE_SCORE_CATEGORIES[key];
+          return <div key={key}>
+            <dt>{label}</dt>
+            <dd>{scores[key] === null ? "Not assessable" : `${scores[key]} / ${maximum}`}</dd>
+          </div>;
+        })}
+      </dl>
+    </div>}
     {videoName && <p className="critique-video-name">Feedback for <strong>{videoName}</strong></p>}
     {critique.subject && <p className="critique-video-name"><strong>Dancer focus:</strong> {critique.subject.description}</p>}
     <p className="critique-summary">{critique.comparison || critique.summary}</p>

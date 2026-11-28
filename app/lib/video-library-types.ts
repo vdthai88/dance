@@ -12,11 +12,13 @@ export type LibraryVideo = {
   groupId: string | null;
 };
 export type VideoGroup = { id: string; name: string; collapsed: boolean };
+export type ScoreRanking = { place: number; totalScores: number };
 export type LibraryUploadResult = LibraryVideo & { alreadyExists: boolean; existingGroupName?: string | null };
 export type LibraryReview = {
   key: string;
   createdAt: string;
   critique: DanceCritique;
+  scoreRanking?: ScoreRanking;
   earlierVideo: LibraryVideo | null;
   newerVideo: LibraryVideo | null;
   comparison: boolean;

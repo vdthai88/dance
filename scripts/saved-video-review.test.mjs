@@ -46,9 +46,11 @@ test('the finished critique occupies the same saved review with just one player'
 });
 
 test('scored feedback shows the total and three categories before the notes', () => {
-  const scoredReview = { ...review, critique: { ...review.critique, scores: { technicalAbility: 38, difficulty: 20, performance: 27 } } };
+  const scoredReview = { ...review, scoreRanking: { place: 12, totalScores: 84 }, critique: { ...review.critique, scores: { technicalAbility: 38, difficulty: 20, performance: 27 } } };
   const html = renderToStaticMarkup(React.createElement(ReviewPlayer, { video, review: scoredReview }));
   assert.match(html, /Total score.*85 \/ 100.*Technical ability.*38 \/ 45.*Difficulty.*20 \/ 25.*Performance.*27 \/ 30.*Finished feedback/);
+  assert.match(html, /Total score.*85 \/ 100.*critique-score-ranking.*<svg.*<dt>Ranked<\/dt><dd>#12<\/dd>.*Technical ability/);
+  assert.doesNotMatch(html, /of 84 scores/);
 });
 
 test('a newly saved upload can display its player and processing status before feedback loads', () => {

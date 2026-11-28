@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { getPostgresPool } from "../../db/postgres";
 import type { LibraryUploadResult, LibraryVideo, LibraryVideoDetails, VideoGroup } from "./video-library-types";
 import { deleteLocalVideo } from "./video-storage";
-import { isDanceCritique } from "./gemini-critique";
+import { DANCE_SCORE_CATEGORIES, isDanceCritique, totalDanceScore } from "./gemini-critique";
 
 type VideoRow = {
   id: string; original_filename: string; content_type: string | null;
@@ -45,6 +45,34 @@ export async function findLibraryVideo(userId: string, id: string) {
   return row ? { video: mapVideo(row, userId), objectKey: row.object_key, hash: row.sha256 } : null;
 }
 
+async function scoreDistribution() {
+  const categoryTotals = Object.entries(DANCE_SCORE_CATEGORIES).map(([key, { maximum }]) => {
+    const value = `(c.critique_json #> '{scores,${key}}')`;
+    return `CASE WHEN jsonb_typeof(${value}) = 'number' THEN
+      CASE WHEN ${value}::numeric BETWEEN 0 AND ${maximum}
+        AND trunc(${value}::numeric) = ${value}::numeric THEN ${value}::int END
+      END`;
+  });
+  const { rows } = await getPostgresPool().query<{ score: number; entries: number }>(`
+    SELECT score, count(*)::int AS entries
+    FROM (
+      SELECT ${categoryTotals.join(" + ")} AS score
+      FROM critiques c
+      WHERE c.owner_user_id IS NOT NULL AND c.critique_json ? 'scores'
+        AND NOT EXISTS (SELECT 1 FROM user_critique_deletions d
+          WHERE d.user_id = c.owner_user_id AND d.cache_key = c.cache_key)
+    ) scores
+    WHERE score IS NOT NULL
+    GROUP BY score ORDER BY score DESC`);
+  let place = 1;
+  const places = new Map(rows.map(({ score, entries }) => {
+    const rank = place;
+    place += entries;
+    return [score, rank] as const;
+  }));
+  return { places, totalScores: place - 1 };
+}
+
 export async function getLibraryVideoDetails(userId: string, id: string): Promise<LibraryVideoDetails | null> {
   const found = await findLibraryVideo(userId, id);
   if (!found) return null;
@@ -55,20 +83,31 @@ export async function getLibraryVideoDetails(userId: string, id: string): Promis
     AND ((earlier_sha256 = $2 AND newer_sha256 IS NULL) OR newer_sha256 = $2) AND NOT EXISTS
       (SELECT 1 FROM user_critique_deletions d WHERE d.user_id = $1 AND d.cache_key = c.cache_key)
     ORDER BY c.created_at DESC LIMIT 30`, [userId, found.hash]);
-  const hashes = [...new Set(rows.flatMap((row) => [row.earlier_sha256, row.newer_sha256]).filter(Boolean))];
-  const related = hashes.length ? await pool.query(`SELECT v.*, ps.session_name, gi.group_id ${ownVideos}
-    AND v.sha256 = ANY($2::text[]) ORDER BY (v.session_id IS NULL) DESC, v.created_at DESC`, [userId, hashes]) : { rows: [] };
+  const reviews = rows.flatMap((row) => {
+    if (!isDanceCritique(row.critique_json)) return [];
+    return [{ row, critique: row.critique_json, total: row.critique_json.scores ? totalDanceScore(row.critique_json.scores) : null }];
+  });
+  const hashes = [...new Set(reviews.flatMap(({ row }) => [row.earlier_sha256, row.newer_sha256]).filter(Boolean))];
+  const [related, distribution] = await Promise.all([
+    hashes.length ? pool.query(`SELECT v.*, ps.session_name, gi.group_id ${ownVideos}
+      AND v.sha256 = ANY($2::text[]) ORDER BY (v.session_id IS NULL) DESC, v.created_at DESC`, [userId, hashes]) : { rows: [] },
+    reviews.some(({ total }) => total !== null) ? scoreDistribution() : null,
+  ]);
   const videoForHash = (hash: string | null) => {
     if (!hash) return null;
     if (hash === found.hash) return found.video;
     const row = (related.rows as VideoRow[]).find((video) => video.sha256 === hash);
     return row ? mapVideo(row, userId) : null;
   };
-  return { video: found.video, reviews: rows.flatMap((row) => isDanceCritique(row.critique_json) ? [{
-    key: row.cache_key as string, createdAt: new Date(row.created_at).toISOString(), critique: row.critique_json,
-    earlierVideo: videoForHash(row.earlier_sha256), newerVideo: videoForHash(row.newer_sha256),
-    comparison: Boolean(row.newer_sha256), earlierSongStart: Number(row.earlier_song_start), newerSongStart: Number(row.newer_song_start),
-  }] : []) };
+  return { video: found.video, reviews: reviews.map(({ row, critique, total }) => {
+    const place = total === null ? undefined : distribution?.places.get(total);
+    return {
+      key: row.cache_key as string, createdAt: new Date(row.created_at).toISOString(), critique,
+      earlierVideo: videoForHash(row.earlier_sha256), newerVideo: videoForHash(row.newer_sha256),
+      comparison: Boolean(row.newer_sha256), earlierSongStart: Number(row.earlier_song_start), newerSongStart: Number(row.newer_song_start),
+      ...(place !== undefined && distribution ? { scoreRanking: { place, totalScores: distribution.totalScores } } : {}),
+    };
+  }) };
 }
 
 export async function listVideoGroups(userId: string): Promise<VideoGroup[]> {

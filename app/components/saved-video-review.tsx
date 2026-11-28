@@ -34,7 +34,7 @@ function ReviewPlayer({ video, review, pendingContent }: { video: LibraryVideo; 
         <div>{video.available ? <video ref={player} controls playsInline preload="metadata" src={`/api/replai-videos/${encodeURIComponent(video.id)}/content`} onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)} onError={() => setError("This video could not be played. Try uploading it again.")} /> : <p>This saved take is no longer available.</p>}</div>
       </div>
       <div className="saved-review-feedback"><div className="saved-review-feedback-inner">
-        {pendingContent || (review && displayedCritique ? <CritiqueCard critique={displayedCritique} currentTime={time} onSeek={seek} videoName={video.filename} title={review.comparison ? "AI COMPARISON & NEW FEEDBACK" : "AI VIDEO CRITIQUE"} /> : <p className="video-library-empty">No AI critique is saved for this video in your account yet.</p>)}
+        {pendingContent || (review && displayedCritique ? <CritiqueCard critique={displayedCritique} currentTime={time} onSeek={seek} videoName={video.filename} scoreRanking={review.scoreRanking} title={review.comparison ? "AI COMPARISON & NEW FEEDBACK" : "AI VIDEO CRITIQUE"} /> : <p className="video-library-empty">No AI critique is saved for this video in your account yet.</p>)}
       </div></div>
     </div>
       {review?.comparison && <p>Compared with {review.earlierVideo?.filename ?? "the earlier take"}. The original critique stays with that video.</p>}
